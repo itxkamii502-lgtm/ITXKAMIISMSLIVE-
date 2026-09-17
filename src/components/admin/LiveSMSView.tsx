@@ -983,16 +983,16 @@ export const LiveSMSView: React.FC = () => {
                     {/* Card Header: Range & CLI + Date */}
                     <div className="flex items-center justify-between gap-2">
                       <div className="flex items-center gap-1.5 flex-wrap">
-                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10.5px] font-bold bg-emerald-950/80 text-emerald-300 border border-emerald-500/30">
-                          <Layers className="w-3 h-3 text-emerald-400" />
-                          <span>{rangeName}</span>
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-black bg-emerald-950/90 text-emerald-300 border border-emerald-500/40 tracking-wide shadow-sm">
+                          <Layers className="w-3.5 h-3.5 text-emerald-400" />
+                          <span className="font-extrabold">{rangeName}</span>
                         </span>
-                        <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[10.5px] font-bold bg-sky-950/80 text-sky-300 border border-sky-500/30 font-mono">
-                          {cliName}
+                        <span className="inline-flex items-center px-2.5 py-1 rounded-md text-xs font-black bg-sky-950/90 text-sky-300 border border-sky-500/40 font-mono tracking-wider shadow-sm">
+                          <span className="font-extrabold">{cliName}</span>
                         </span>
                       </div>
                       <div className="text-[10px] font-mono text-slate-400 flex items-center gap-1">
-                        <Clock className="w-3 h-3 text-slate-500" />
+                        <Clock className="w-3.5 h-3.5 text-slate-500" />
                         <span>{dateStr}</span>
                       </div>
                     </div>
@@ -1161,15 +1161,10 @@ export const LiveSMSView: React.FC = () => {
                             zoomMode === 'ultra' ? 'py-2.5 px-2.5' : 'py-3.5 px-3.5'
                           } whitespace-nowrap border-r border-slate-800/70`}
                         >
-                          <div className="flex flex-col gap-1 items-start">
-                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[10.5px] font-bold bg-emerald-950/80 text-emerald-300 border border-emerald-500/30 shadow-sm">
-                              <Layers className="w-3 h-3 text-emerald-400" />
-                              <span>{rangeName}</span>
-                            </span>
-                            <span className="text-[9.5px] font-mono text-slate-400 px-1.5 py-0.5 rounded bg-slate-950/80 border border-slate-800/80">
-                              Stream: {msg.service || `Part ${msg.partition || selectedPart}`}
-                            </span>
-                          </div>
+                          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-black bg-emerald-950/80 text-emerald-300 border border-emerald-500/40 shadow-sm tracking-wide">
+                            <Layers className="w-3.5 h-3.5 text-emerald-400" />
+                            <span className="font-extrabold">{rangeName}</span>
+                          </span>
                         </td>
 
                         {/* COLUMN 3: MOBILE NUMBER */}
@@ -1192,8 +1187,8 @@ export const LiveSMSView: React.FC = () => {
                             zoomMode === 'ultra' ? 'py-2.5 px-2.5' : 'py-3.5 px-3.5'
                           } whitespace-nowrap border-r border-slate-800/70`}
                         >
-                          <span className="inline-flex items-center px-2.5 py-1 rounded-lg text-[11.5px] font-bold bg-sky-950/80 text-sky-300 border border-sky-500/40 font-mono shadow-sm tracking-wide">
-                            <span className="truncate max-w-[130px]">{cliName}</span>
+                          <span className="inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-black bg-sky-950/80 text-sky-300 border border-sky-500/50 font-mono shadow-sm tracking-wider">
+                            <span className="truncate max-w-[130px] font-extrabold">{cliName}</span>
                           </span>
                         </td>
 

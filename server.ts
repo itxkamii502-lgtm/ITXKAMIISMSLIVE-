@@ -1153,13 +1153,14 @@ async function syncProvider(provider: any) {
 
       const fetchItemsFromUrl = async (fetchUrl: string): Promise<any[]> => {
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 4500);
+        const timeoutId = setTimeout(() => controller.abort(), 10000);
 
         try {
           const response = await fetch(fetchUrl, {
             method: provider.method || 'GET',
             headers: {
               'Accept': 'application/json, text/plain, */*',
+              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) KBMaxLiveGateway/3.0',
               ...(provider.headers || {}),
             },
             signal: controller.signal,
@@ -1222,29 +1223,39 @@ async function syncProvider(provider: any) {
             (phoneField && item[phoneField]) ||
             item.num || item.number || item.phone || item.mobile || item.msisdn ||
             item.recipient || item.destination || item.to || item.user_number ||
-            item.phonenumber || item.mobile_no || item.receiver || item.dest ||
-            item.sim || item.address || item.target || ''
+            item.phonenumber || item.phone_number || item.mobile_no || item.receiver || item.dest ||
+            item.sim || item.address || item.target || item.ani || item.dnis ||
+            item.sender_phone || item.sender_number || item.tel || item.telephone || ''
           ).trim();
 
           const rawSender = String(
             (senderField && item[senderField]) ||
-            item.cli || item.callerId || item.brand || item.sender || item.senderId ||
-            item.from || item.source || item.service || item.app || item.header ||
+            item.cli || item.callerId || item.caller_id || item.brand || item.sender || item.senderId ||
+            item.sender_id || item.from || item.source || item.service || item.app || item.header ||
             item.mask || item.originator || ''
           ).trim();
 
-          const rawCli = String(item.cli || item.callerId || rawSender || item.brand || '').trim();
+          const rawCli = String(item.cli || item.callerId || item.caller_id || rawSender || item.brand || '').trim();
           const rawMsg = String(
             (messageField && item[messageField]) ||
             item.message || item.text || item.body || item.sms || item.msg ||
             item.sms_text || item.content || item.msg_body || item.full_message ||
-            item.sms_content || item.data || ''
+            item.sms_content || item.data || item.sms_body || item.smsText || item.smsBody ||
+            item.short_message || item.msg_content || item.message_content || ''
           ).trim();
 
           const rawOtp = String((otpField && item[otpField]) || item.otp || item.code || item.verification_code || '').trim();
           const rawCountry = item.country || item.nation || item.rangs || item.range || item.country_name || undefined;
           const rawDate = (timeField && item[timeField]) || item.dt || item.timestamp || item.date || item.datetime || item.created_at || item.received_at || item.time || item.sent_time;
-          const parsedTimestamp = rawDate ? (typeof rawDate === 'number' ? (rawDate < 1e11 ? rawDate * 1000 : rawDate) : new Date(rawDate).getTime()) : Date.now();
+          let parsedTimestamp = Date.now();
+          if (rawDate) {
+            if (typeof rawDate === 'number') {
+              parsedTimestamp = rawDate < 1e11 ? rawDate * 1000 : rawDate;
+            } else {
+              const parsed = new Date(rawDate).getTime();
+              if (!isNaN(parsed)) parsedTimestamp = parsed;
+            }
+          }
 
           if (rawPhone || rawMsg) {
             const added = store.addMessage({
@@ -1291,28 +1302,34 @@ async function syncProvider(provider: any) {
 }
 
 // Background parallel poller: Syncs ALL active providers concurrently every 1000ms (1 second)
-setInterval(async () => {
+// Resilient loop with top-level error boundary ensuring it NEVER stops as long as providers are active
+const runBackgroundPoller = async () => {
   try {
     const providers = store.getProviders();
-    const activeProviders = providers.filter(p => p.enabled && p.autoSync);
+    const activeProviders = providers.filter(p => p && p.enabled && p.autoSync);
     
     if (activeProviders.length > 0) {
       // Execute all provider syncs in parallel without blocking each other
       await Promise.allSettled(
-        activeProviders.map(provider => {
-          const minInterval = Math.max(1000, (provider.syncIntervalSec || 1) * 1000);
-          const lastSync = provider.lastSyncTime || 0;
-          if (Date.now() - lastSync >= minInterval) {
-            return syncProvider(provider);
+        activeProviders.map(async (provider) => {
+          try {
+            const minInterval = Math.max(1000, (provider.syncIntervalSec || 1) * 1000);
+            const lastSync = provider.lastSyncTime || 0;
+            if (Date.now() - lastSync >= minInterval) {
+              await syncProvider(provider);
+            }
+          } catch (syncErr) {
+            console.error(`[Poller] Provider sync error for ${provider.name || provider.id}:`, syncErr);
           }
-          return Promise.resolve();
         })
       );
     }
-  } catch {
-    // Ignore background interval errors
+  } catch (loopErr) {
+    console.error('[Poller] Background poller loop caught error:', loopErr);
   }
-}, 1000);
+};
+
+setInterval(runBackgroundPoller, 1000);
 
 // ==========================================
 // 6. SETTINGS & STATS (ADMIN ONLY)

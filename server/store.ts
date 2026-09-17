@@ -1,3 +1,5 @@
+import fs from 'fs';
+import path from 'path';
 import crypto from 'crypto';
 import type { 
   ApiProvider, 
@@ -11,6 +13,9 @@ import type {
   ClientFilterRule,
   NumberRange
 } from '../src/types';
+
+const DATA_DIR = path.join(process.cwd(), 'data');
+const DATA_FILE = path.join(DATA_DIR, 'storage.json');
 
 // Timing-safe string comparison using SHA-256 digests to prevent length and timing side-channel leakage
 export function safeCompare(a: string | undefined | null, b: string | undefined | null): boolean {
@@ -448,10 +453,111 @@ class Store {
   // Robust Persistent Seen-Registry for Deduplication
   // Retains seen message signatures even across admin log clears to prevent old SMS re-syncing
   private seenFingerprints: Map<string, number> = new Map();
+  private saveTimeout: NodeJS.Timeout | null = null;
 
   constructor() {
-    this.seedInitialData();
+    const loaded = this.loadFromDisk();
+    if (!loaded) {
+      this.seedInitialData();
+      this.saveToDisk();
+    }
     this.startBackgroundPoller();
+  }
+
+  public scheduleSave() {
+    if (this.saveTimeout) return;
+    this.saveTimeout = setTimeout(() => {
+      this.saveTimeout = null;
+      this.saveToDisk();
+    }, 1500);
+  }
+
+  public saveToDisk() {
+    try {
+      if (!fs.existsSync(DATA_DIR)) {
+        fs.mkdirSync(DATA_DIR, { recursive: true });
+      }
+      const payload = {
+        settings: this.settings,
+        partitions: Array.from(this.partitions.values()),
+        apiProviders: Array.from(this.apiProviders.values()),
+        clients: Array.from(this.clients.values()),
+        ranges: Array.from(this.ranges.values()),
+        clientFilterRules: Array.from(this.clientFilterRules.values()),
+        messages: this.messages.slice(0, 3000),
+        seenFingerprints: Array.from(this.seenFingerprints.entries()).slice(-15000),
+      };
+      fs.writeFileSync(DATA_FILE, JSON.stringify(payload, null, 2), 'utf-8');
+    } catch (err) {
+      console.error('Storage save error:', err);
+    }
+  }
+
+  private loadFromDisk(): boolean {
+    try {
+      if (!fs.existsSync(DATA_DIR)) {
+        fs.mkdirSync(DATA_DIR, { recursive: true });
+      }
+      if (!fs.existsSync(DATA_FILE)) {
+        return false;
+      }
+      const raw = fs.readFileSync(DATA_FILE, 'utf-8');
+      if (!raw || !raw.trim()) return false;
+      const data = JSON.parse(raw);
+
+      if (data.settings && typeof data.settings === 'object') {
+        this.settings = { ...this.settings, ...data.settings };
+      }
+      if (Array.isArray(data.partitions) && data.partitions.length > 0) {
+        this.partitions.clear();
+        for (const p of data.partitions) {
+          if (p && p.id) this.partitions.set(p.id, p);
+        }
+      }
+      if (Array.isArray(data.apiProviders)) {
+        this.apiProviders.clear();
+        for (const ap of data.apiProviders) {
+          if (ap && ap.id) this.apiProviders.set(ap.id, ap);
+        }
+      }
+      if (Array.isArray(data.clients)) {
+        this.clients.clear();
+        for (const c of data.clients) {
+          if (c && c.id) this.clients.set(c.id, c);
+        }
+      }
+      if (Array.isArray(data.ranges)) {
+        this.ranges.clear();
+        this.phoneToRangeMap.clear();
+        for (const r of data.ranges) {
+          if (r && r.id) {
+            this.ranges.set(r.id, r);
+            if (Array.isArray(r.numbers)) {
+              for (const num of r.numbers) {
+                this.phoneToRangeMap.set(num, r.id);
+              }
+            }
+          }
+        }
+      }
+      if (Array.isArray(data.clientFilterRules)) {
+        this.clientFilterRules.clear();
+        for (const cfr of data.clientFilterRules) {
+          if (cfr && cfr.id) this.clientFilterRules.set(cfr.id, cfr);
+        }
+      }
+      if (Array.isArray(data.messages)) {
+        this.messages = data.messages;
+      }
+      if (Array.isArray(data.seenFingerprints)) {
+        this.seenFingerprints = new Map(data.seenFingerprints);
+      }
+      console.log(`[Storage] Loaded successfully: ${this.apiProviders.size} providers, ${this.ranges.size} ranges, ${this.messages.length} messages.`);
+      return true;
+    } catch (err) {
+      console.error('Storage load error:', err);
+      return false;
+    }
   }
 
   public onNewMessage(listener: (msg: SmsMessage) => void): () => void {
@@ -755,6 +861,7 @@ class Store {
     };
 
     this.clients.set(id, newClient);
+    this.scheduleSave();
     return { client: newClient };
   }
 
@@ -792,13 +899,16 @@ class Store {
       }
     }
 
+    this.scheduleSave();
     return { client };
   }
 
   public deleteClient(id: string): boolean {
     if (this.clients.has(id)) {
       this.destroyClientSessions(id);
-      return this.clients.delete(id);
+      const res = this.clients.delete(id);
+      if (res) this.scheduleSave();
+      return res;
     }
     return false;
   }
@@ -825,6 +935,7 @@ class Store {
       createdAt: Date.now(),
     };
     this.partitions.set(id, partition);
+    this.scheduleSave();
     return { partition };
   }
 
@@ -860,6 +971,7 @@ class Store {
       }
     }
 
+    this.scheduleSave();
     return { partition };
   }
 
@@ -891,6 +1003,7 @@ class Store {
           }
         }
       }
+      this.scheduleSave();
       return { success: true };
     }
     return { success: false, error: 'Failed to delete partition' };
@@ -974,6 +1087,7 @@ class Store {
     };
 
     this.apiProviders.set(id, provider);
+    this.scheduleSave();
     return { provider };
   }
 
@@ -1003,11 +1117,17 @@ class Store {
     }
 
     Object.assign(provider, data);
+    // Persist configuration changes to disk
+    if (data.apiUrl || data.name || data.apiToken || data.enabled !== undefined || data.autoSync !== undefined || data.partId) {
+      this.scheduleSave();
+    }
     return { provider };
   }
 
   public deleteProvider(id: string): boolean {
-    return this.apiProviders.delete(id);
+    const res = this.apiProviders.delete(id);
+    if (res) this.scheduleSave();
+    return res;
   }
 
   // --- SMS Messages & Webhook Inbound ---
@@ -1264,6 +1384,7 @@ class Store {
 
     newRange.totalNumbers = newRange.numbers.length;
     this.ranges.set(id, newRange);
+    this.scheduleSave();
 
     return {
       success: true,
@@ -1323,6 +1444,7 @@ class Store {
 
     range.totalNumbers = range.numbers.length;
     range.updatedAt = Date.now();
+    this.scheduleSave();
 
     return {
       success: true,
@@ -1359,6 +1481,7 @@ class Store {
     const removedCount = originalLen - range.numbers.length;
     range.totalNumbers = range.numbers.length;
     range.updatedAt = Date.now();
+    this.scheduleSave();
 
     return {
       success: true,
@@ -1390,6 +1513,7 @@ class Store {
     range.numbers = [];
     range.totalNumbers = 0;
     range.updatedAt = Date.now();
+    this.scheduleSave();
 
     return {
       success: true,
@@ -1408,7 +1532,9 @@ class Store {
       }
     }
 
-    return this.ranges.delete(rangeId);
+    const res = this.ranges.delete(rangeId);
+    if (res) this.scheduleSave();
+    return res;
   }
 
   public getRangeNumbers(rangeId: string, search?: string, page: number = 1, limit: number = 50): {
@@ -1544,11 +1670,10 @@ class Store {
       return null;
     }
 
-    // 2. Secondary In-Memory Array Check (Phone + exact text or 24h duplicate)
+    // 2. Secondary In-Memory Array Check (Phone + exact text within 60s duplicate)
     const existingIndex = this.messages.findIndex(m => {
       if (m.phone !== phone) return false;
-      // Exact message on same phone within 24h
-      if (cleanMsg && m.message && m.message.trim() === cleanMsg && Math.abs(m.timestamp - dataTs) < 86400000) {
+      if (cleanMsg && m.message && m.message.trim() === cleanMsg && Math.abs(m.timestamp - dataTs) < 60000) {
         return true;
       }
       return false;
@@ -1636,6 +1761,8 @@ class Store {
       }
     }
 
+    this.scheduleSave();
+
     return msg;
   }
 
@@ -1711,6 +1838,7 @@ class Store {
       m.isClientBlocked = this.isMessageBlockedForClients(m);
     }
 
+    this.scheduleSave();
     return { rule };
   }
 
@@ -1723,6 +1851,7 @@ class Store {
     for (const m of this.messages) {
       m.isClientBlocked = this.isMessageBlockedForClients(m);
     }
+    this.scheduleSave();
     return true;
   }
 
@@ -1732,6 +1861,7 @@ class Store {
       for (const m of this.messages) {
         m.isClientBlocked = this.isMessageBlockedForClients(m);
       }
+      this.scheduleSave();
     }
     return deleted;
   }
@@ -1828,6 +1958,7 @@ class Store {
 
         return !(mPartId === pStr || mPart === pStr || mPartName === pStr);
       });
+      this.scheduleSave();
       return true;
     }
 
@@ -1835,6 +1966,7 @@ class Store {
     for (const provider of this.apiProviders.values()) {
       provider.totalFetched = 0;
     }
+    this.scheduleSave();
     return true;
   }
 
@@ -1842,6 +1974,7 @@ class Store {
     const index = this.messages.findIndex(m => m.id === id);
     if (index !== -1) {
       this.messages.splice(index, 1);
+      this.scheduleSave();
       return true;
     }
     return false;
@@ -1878,6 +2011,7 @@ class Store {
         this.messages.length = this.settings.maxSmsRetention;
       }
     }
+    this.scheduleSave();
     return this.getSettings();
   }
 

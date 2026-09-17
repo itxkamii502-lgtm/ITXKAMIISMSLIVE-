@@ -316,7 +316,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
                         {dateStr}
                       </td>
                       <td className="py-3 px-4 whitespace-nowrap">
-                        <span className="px-2 py-0.5 rounded-full text-[11px] font-medium bg-emerald-950/60 text-emerald-300 border border-emerald-500/30">
+                        <span className="px-2.5 py-0.5 rounded-full text-[11px] font-extrabold bg-emerald-950/80 text-emerald-300 border border-emerald-500/40">
                           {countryName}
                         </span>
                       </td>
@@ -324,7 +324,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
                         {msg.phone || (msg as any).num || (msg as any).number || 'N/A'}
                       </td>
                       <td className="py-3 px-4 whitespace-nowrap">
-                        <span className="px-2 py-0.5 rounded text-[11px] font-bold bg-sky-950/60 text-sky-300 border border-sky-500/30 font-mono">
+                        <span className="px-2.5 py-0.5 rounded text-[11px] font-extrabold bg-sky-950/80 text-sky-300 border border-sky-500/40 font-mono tracking-wider">
                           {cliName}
                         </span>
                       </td>
