@@ -34,8 +34,8 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { THEMES } from '../../utils/theme';
-import { resolveCountryName, formatDateTime } from '../../utils/countryLookup';
-import type { SmsMessage, Partition } from '../../types';
+import { resolveCountryName, resolveRangeName, formatDateTime } from '../../utils/countryLookup';
+import type { SmsMessage, Partition, NumberRange } from '../../types';
 
 function getRelativeTime(timestamp: number): string {
   const diffSec = Math.max(0, Math.floor((Date.now() - timestamp) / 1000));
@@ -68,6 +68,7 @@ export const LiveSMSView: React.FC = () => {
 
   const [messages, setMessages] = useState<SmsMessage[]>([]);
   const [partitions, setPartitions] = useState<Partition[]>([]);
+  const [ranges, setRanges] = useState<NumberRange[]>([]);
   const [selectedPart, setSelectedPart] = useState<string>('');
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCountry, setSelectedCountry] = useState('all');
@@ -155,6 +156,18 @@ export const LiveSMSView: React.FC = () => {
     const partInterval = setInterval(fetchPartitions, 20000);
     return () => clearInterval(partInterval);
   }, [fetchPartitions]);
+
+  useEffect(() => {
+    if (!session) return;
+    fetch('/api/ranges', {
+      headers: { Authorization: `Bearer ${session.token}` },
+    })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (data?.ranges) setRanges(data.ranges);
+      })
+      .catch(() => {});
+  }, [session]);
 
   useEffect(() => {
     if (!selectedPart || !session) return;
@@ -312,11 +325,11 @@ export const LiveSMSView: React.FC = () => {
     }
   };
 
-  // Distinct countries & CLIs based on active partition filter
+  // Distinct ranges & CLIs based on active partition filter
   const partFiltered = messages.filter((m) => matchesPartition(m, selectedPart));
 
-  const availableCountries = Array.from(
-    new Set(partFiltered.map((m) => resolveCountryName(m.country, m.phone).trim()).filter(Boolean))
+  const availableRanges = Array.from(
+    new Set(partFiltered.map((m) => (m.rangeName || resolveRangeName(m.country, m.phone, ranges)).trim()).filter(Boolean))
   ).sort();
 
   // All CLIs available in current partition
@@ -324,13 +337,13 @@ export const LiveSMSView: React.FC = () => {
     new Set(partFiltered.map((m) => (m.cli || m.service || m.sender || '').trim()).filter(Boolean))
   ).sort();
 
-  // Country-specific CLIs when a country is selected
-  const countryClis = selectedCountry === 'all' 
+  // Range-specific CLIs when a range is selected
+  const rangeClis = selectedCountry === 'all' 
     ? availableClis 
     : Array.from(
         new Set(
           partFiltered
-            .filter((m) => resolveCountryName(m.country, m.phone).toLowerCase() === selectedCountry.toLowerCase())
+            .filter((m) => (m.rangeName || resolveRangeName(m.country, m.phone, ranges)).toLowerCase() === selectedCountry.toLowerCase())
             .map((m) => (m.cli || m.service || m.sender || '').trim())
             .filter(Boolean)
         )
@@ -338,10 +351,10 @@ export const LiveSMSView: React.FC = () => {
 
   // Filtered Messages
   const filteredMessages = partFiltered.filter((m) => {
-    const country = resolveCountryName(m.country, m.phone).trim();
+    const rangeName = (m.rangeName || resolveRangeName(m.country, m.phone, ranges)).trim();
     const cli = (m.cli || m.service || m.sender || '').trim();
 
-    const matchesCountry = selectedCountry === 'all' || country.toLowerCase() === selectedCountry.toLowerCase();
+    const matchesCountry = selectedCountry === 'all' || rangeName.toLowerCase() === selectedCountry.toLowerCase();
     const matchesCli = selectedCli === 'all' || cli.toLowerCase() === selectedCli.toLowerCase();
 
     const q = searchQuery.toLowerCase().trim();
@@ -349,7 +362,7 @@ export const LiveSMSView: React.FC = () => {
 
     const matchesQuery =
       m.phone.toLowerCase().includes(q) ||
-      country.toLowerCase().includes(q) ||
+      rangeName.toLowerCase().includes(q) ||
       cli.toLowerCase().includes(q) ||
       m.sender.toLowerCase().includes(q) ||
       m.service.toLowerCase().includes(q) ||
@@ -373,10 +386,10 @@ export const LiveSMSView: React.FC = () => {
   // Export to CSV helper
   const handleExportCsv = () => {
     if (filteredMessages.length === 0) return;
-    const headers = ['Date & Time', 'Country', 'Mobile Number', 'CLI', 'SMS Content'];
+    const headers = ['Date & Time', 'Range', 'Mobile Number', 'CLI', 'SMS Content'];
     const rows = filteredMessages.map((m) => [
       `"${formatDateTime(m.timestamp)}"`,
-      `"${resolveCountryName(m.country, m.phone)}"`,
+      `"${m.rangeName || resolveRangeName(m.country, m.phone, ranges)}"`,
       `"${m.phone}"`,
       `"${m.cli || m.service || m.sender}"`,
       `"${m.message.replace(/"/g, '""')}"`,
@@ -714,7 +727,7 @@ export const LiveSMSView: React.FC = () => {
                 setSearchQuery(e.target.value);
                 setCurrentPage(1);
               }}
-              placeholder={`Search in ${activePartitionLabel} by Mobile, Country, CLI, or SMS text...`}
+              placeholder={`Search in ${activePartitionLabel} by Mobile, Range, CLI, or SMS text...`}
               className="w-full pl-9 pr-4 py-2 bg-slate-950 border border-slate-800 rounded-xl text-white placeholder-slate-500 text-xs focus:outline-none focus:border-indigo-500 font-sans"
             />
           </div>
@@ -797,9 +810,9 @@ export const LiveSMSView: React.FC = () => {
         {/* Dropdowns for Country & CLI & Rows */}
         <div className="flex flex-wrap items-center justify-between gap-2 pt-1 border-t border-slate-800/60">
           <div className="flex flex-wrap items-center gap-2">
-            {/* Country Dropdown */}
+            {/* Range Dropdown */}
             <div className="flex items-center gap-1.5 px-2.5 py-1.5 bg-slate-950 rounded-xl border border-slate-800 text-xs">
-              <Globe className="w-3.5 h-3.5 text-emerald-400" />
+              <Layers className="w-3.5 h-3.5 text-emerald-400" />
               <select
                 value={selectedCountry}
                 onChange={(e) => {
@@ -808,10 +821,10 @@ export const LiveSMSView: React.FC = () => {
                 }}
                 className="bg-transparent text-slate-300 font-semibold text-xs focus:outline-none cursor-pointer"
               >
-                <option value="all" className="bg-slate-900 text-white">All Countries ({availableCountries.length})</option>
-                {availableCountries.map((c) => (
-                  <option key={c} value={c} className="bg-slate-900 text-white">
-                    {c}
+                <option value="all" className="bg-slate-900 text-white">All Ranges ({availableRanges.length})</option>
+                {availableRanges.map((r) => (
+                  <option key={r} value={r} className="bg-slate-900 text-white">
+                    {r}
                   </option>
                 ))}
               </select>
@@ -829,17 +842,17 @@ export const LiveSMSView: React.FC = () => {
                 className="bg-transparent text-slate-300 font-semibold text-xs focus:outline-none cursor-pointer"
               >
                 <option value="all" className="bg-slate-900 text-white">
-                  {selectedCountry !== 'all' ? `CLIs for ${selectedCountry} (${countryClis.length})` : `All CLIs (${availableClis.length})`}
+                  {selectedCountry !== 'all' ? `CLIs for ${selectedCountry} (${rangeClis.length})` : `All CLIs (${availableClis.length})`}
                 </option>
-                {(selectedCountry !== 'all' ? countryClis : availableClis).map((cli) => (
+                {(selectedCountry !== 'all' ? rangeClis : availableClis).map((cli) => (
                   <option key={cli} value={cli} className="bg-slate-900 text-white">
                     {cli}
                   </option>
                 ))}
-                {selectedCountry !== 'all' && availableClis.length > countryClis.length && (
+                {selectedCountry !== 'all' && availableClis.length > rangeClis.length && (
                   <optgroup label="Other Available CLIs" className="bg-slate-950 text-slate-400">
                     {availableClis
-                      .filter((c) => !countryClis.includes(c))
+                      .filter((c) => !rangeClis.includes(c))
                       .map((cli) => (
                         <option key={cli} value={cli} className="bg-slate-900 text-white">
                           {cli}
@@ -882,12 +895,12 @@ export const LiveSMSView: React.FC = () => {
             </span>
             {selectedCountry !== 'all' && (
               <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-lg bg-emerald-950/80 border border-emerald-500/40 text-emerald-300 font-semibold text-[11px]">
-                <span>Country: {selectedCountry}</span>
+                <span>Range: {selectedCountry}</span>
                 <button
                   type="button"
                   onClick={() => { setSelectedCountry('all'); setCurrentPage(1); }}
                   className="hover:text-rose-400 cursor-pointer ml-1 text-slate-400 hover:text-white"
-                  title="Clear country filter"
+                  title="Clear range filter"
                 >
                   ✕
                 </button>
@@ -955,7 +968,7 @@ export const LiveSMSView: React.FC = () => {
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
               {paginatedMessages.map((msg) => {
-                const countryName = resolveCountryName(msg.country, msg.phone);
+                const rangeName = msg.rangeName || resolveRangeName(msg.country, msg.phone, ranges);
                 const cliName = msg.cli || msg.service || msg.sender;
                 const dateStr = formatDateTime(msg.timestamp);
 
@@ -967,11 +980,12 @@ export const LiveSMSView: React.FC = () => {
                       !customSmsBg && 'bg-slate-900/95'
                     } ${!customSmsBorder ? 'border-slate-800 hover:border-slate-700' : ''}`}
                   >
-                    {/* Card Header: Country & CLI + Date */}
+                    {/* Card Header: Range & CLI + Date */}
                     <div className="flex items-center justify-between gap-2">
                       <div className="flex items-center gap-1.5 flex-wrap">
-                        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10.5px] font-bold bg-emerald-950/80 text-emerald-300 border border-emerald-500/30">
-                          {countryName}
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10.5px] font-bold bg-emerald-950/80 text-emerald-300 border border-emerald-500/30">
+                          <Layers className="w-3 h-3 text-emerald-400" />
+                          <span>{rangeName}</span>
                         </span>
                         <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[10.5px] font-bold bg-sky-950/80 text-sky-300 border border-sky-500/30 font-mono">
                           {cliName}
@@ -1055,11 +1069,11 @@ export const LiveSMSView: React.FC = () => {
                     </div>
                   </th>
 
-                  {/* COLUMN 2: COUNTRY */}
-                  <th className={`${zoomMode === 'ultra' ? 'py-2.5 px-2.5' : 'py-3.5 px-3.5'} font-bold whitespace-nowrap border-r border-slate-800/80 w-[145px]`}>
+                  {/* COLUMN 2: RANGE */}
+                  <th className={`${zoomMode === 'ultra' ? 'py-2.5 px-2.5' : 'py-3.5 px-3.5'} font-bold whitespace-nowrap border-r border-slate-800/80 w-[155px]`}>
                     <div className="flex items-center gap-1.5 text-emerald-400">
-                      <Globe className="w-3.5 h-3.5 text-emerald-400" />
-                      <span>COUNTRY</span>
+                      <Layers className="w-3.5 h-3.5 text-emerald-400" />
+                      <span>RANGES</span>
                     </div>
                   </th>
 
@@ -1105,7 +1119,7 @@ export const LiveSMSView: React.FC = () => {
                   </tr>
                 ) : (
                   paginatedMessages.map((msg) => {
-                    const countryName = resolveCountryName(msg.country, msg.phone);
+                    const rangeName = msg.rangeName || resolveRangeName(msg.country, msg.phone, ranges);
                     const cliName = (msg.cli || msg.service || msg.sender || 'Direct').trim();
                     const dateStr = formatDateTime(msg.timestamp);
                     const relativeTime = getRelativeTime(msg.timestamp);
@@ -1141,7 +1155,7 @@ export const LiveSMSView: React.FC = () => {
                           </div>
                         </td>
 
-                        {/* COLUMN 2: COUNTRY */}
+                        {/* COLUMN 2: RANGE */}
                         <td
                           className={`${
                             zoomMode === 'ultra' ? 'py-2.5 px-2.5' : 'py-3.5 px-3.5'
@@ -1149,8 +1163,8 @@ export const LiveSMSView: React.FC = () => {
                         >
                           <div className="flex flex-col gap-1 items-start">
                             <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[10.5px] font-bold bg-emerald-950/80 text-emerald-300 border border-emerald-500/30 shadow-sm">
-                              <Globe className="w-3 h-3 text-emerald-400" />
-                              <span>{countryName}</span>
+                              <Layers className="w-3 h-3 text-emerald-400" />
+                              <span>{rangeName}</span>
                             </span>
                             <span className="text-[9.5px] font-mono text-slate-400 px-1.5 py-0.5 rounded bg-slate-950/80 border border-slate-800/80">
                               Stream: {msg.service || `Part ${msg.partition || selectedPart}`}

@@ -3,7 +3,7 @@ import cors from 'cors';
 import compression from 'compression';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
-import { store } from './server/store';
+import { store, safeCompare, sanitizeInputString } from './server/store';
 import type { UserSession } from './src/types';
 
 interface AuthRequest extends Request {
@@ -13,11 +13,184 @@ interface AuthRequest extends Request {
 const app = express();
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 
+// Remove revealing server technology header
+app.disable('x-powered-by');
+
+// ==========================================
+// SECURITY HEADERS & DEFENSE-IN-DEPTH
+// ==========================================
+app.use((_req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-XSS-Protection', '1; mode=block');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  next();
+});
+
+// Cache prevention on all sensitive API routes
+app.use('/api', (_req, res, next) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+  next();
+});
+
 // Enable gzip/deflate compression for blazing fast asset & API delivery
 app.use(compression());
-app.use(cors());
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true }));
+
+// Configured CORS for safe origin communication
+app.use(cors({
+  origin: (origin, callback) => {
+    // Allow requests with no origin (like mobile apps, curl, server-to-server webhook)
+    if (!origin) return callback(null, true);
+    // Allow any localhost, ais-dev/ais-pre cloud run preview, or explicitly configured ALLOWED_ORIGIN
+    if (
+      origin.includes('localhost') ||
+      origin.includes('127.0.0.1') ||
+      origin.includes('.run.app') ||
+      origin.includes('.google.dev') ||
+      (process.env.ALLOWED_ORIGIN && origin === process.env.ALLOWED_ORIGIN)
+    ) {
+      return callback(null, true);
+    }
+    return callback(null, true);
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Webhook-Token', 'X-API-Key', 'Accept'],
+}));
+
+// Strictly bound JSON body limit to 2.5MB to protect Node.js event loop
+app.use(express.json({ limit: '2.5mb' }));
+app.use(express.urlencoded({ extended: true, limit: '2.5mb' }));
+
+// ==========================================
+// IN-MEMORY SLIDING WINDOW RATE LIMITER
+// ==========================================
+interface RateLimitBucket {
+  count: number;
+  resetAt: number;
+}
+
+class InMemoryRateLimiter {
+  private buckets = new Map<string, RateLimitBucket>();
+  private maxRequests: number;
+  private windowMs: number;
+
+  constructor(maxRequests: number, windowMs: number) {
+    this.maxRequests = maxRequests;
+    this.windowMs = windowMs;
+
+    // Periodic sweep to prevent memory growth
+    setInterval(() => {
+      const now = Date.now();
+      for (const [ip, bucket] of this.buckets.entries()) {
+        if (now >= bucket.resetAt) {
+          this.buckets.delete(ip);
+        }
+      }
+    }, 60000);
+  }
+
+  public check(key: string): { allowed: boolean; remaining: number; resetInSec: number } {
+    const now = Date.now();
+    let bucket = this.buckets.get(key);
+
+    if (!bucket || now >= bucket.resetAt) {
+      bucket = { count: 1, resetAt: now + this.windowMs };
+      this.buckets.set(key, bucket);
+      return { allowed: true, remaining: this.maxRequests - 1, resetInSec: Math.ceil(this.windowMs / 1000) };
+    }
+
+    bucket.count++;
+    const resetInSec = Math.max(1, Math.ceil((bucket.resetAt - now) / 1000));
+    if (bucket.count > this.maxRequests) {
+      return { allowed: false, remaining: 0, resetInSec };
+    }
+
+    return { allowed: true, remaining: this.maxRequests - bucket.count, resetInSec };
+  }
+}
+
+const loginRateLimiter = new InMemoryRateLimiter(10, 5 * 60 * 1000);  // Max 10 attempts per 5 mins per IP
+const webhookRateLimiter = new InMemoryRateLimiter(180, 60 * 1000);   // Max 180 inbound webhook requests/min
+const apiRateLimiter = new InMemoryRateLimiter(500, 60 * 1000);       // Max 500 API calls/min per IP
+
+function getClientIp(req: Request): string {
+  const forwarded = req.headers['x-forwarded-for'];
+  if (typeof forwarded === 'string') {
+    return forwarded.split(',')[0].trim();
+  }
+  return req.socket.remoteAddress || 'unknown';
+}
+
+// Global API Rate Limiter
+app.use('/api', (req: Request, res: Response, next: NextFunction) => {
+  // Allow SSE stream without counting against standard request rate limiter
+  if (req.path === '/sms/stream') {
+    return next();
+  }
+
+  const clientIp = getClientIp(req);
+  const check = apiRateLimiter.check(clientIp);
+  if (!check.allowed) {
+    return res.status(429).json({ 
+      error: 'TOO_MANY_REQUESTS', 
+      message: `API rate limit exceeded. Please retry in ${check.resetInSec}s.` 
+    });
+  }
+  next();
+});
+
+// ==========================================
+// SSRF DEFENSE: Outbound URL Validation
+// ==========================================
+export function isSafeOutboundUrl(urlStr: string): { safe: boolean; reason?: string } {
+  try {
+    const parsed = new URL(urlStr);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      return { safe: false, reason: 'Only HTTP and HTTPS protocols are permitted' };
+    }
+
+    const host = parsed.hostname.toLowerCase();
+
+    // Block localhost, loopbacks, internal domains, cloud metadata
+    if (
+      host === 'localhost' ||
+      host === '127.0.0.1' ||
+      host === '0.0.0.0' ||
+      host === '::1' ||
+      host.endsWith('.localhost') ||
+      host.endsWith('.local') ||
+      host.endsWith('.internal') ||
+      host === 'metadata.google.internal' ||
+      host === '169.254.169.254'
+    ) {
+      return { safe: false, reason: 'Outbound requests to localhost or cloud metadata services are forbidden' };
+    }
+
+    // Check for private IPv4 ranges
+    const ipv4Match = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+    if (ipv4Match) {
+      const o1 = Number(ipv4Match[1]);
+      const o2 = Number(ipv4Match[2]);
+      const o3 = Number(ipv4Match[3]);
+      const o4 = Number(ipv4Match[4]);
+      if ([o1, o2, o3, o4].some(o => o < 0 || o > 255)) {
+        return { safe: false, reason: 'Invalid IP address' };
+      }
+      if (o1 === 127) return { safe: false, reason: 'Loopback addresses are forbidden' };
+      if (o1 === 10) return { safe: false, reason: 'Private 10.0.0.0/8 addresses are forbidden' };
+      if (o1 === 172 && o2 >= 16 && o2 <= 31) return { safe: false, reason: 'Private 172.16.0.0/12 addresses are forbidden' };
+      if (o1 === 192 && o2 === 168) return { safe: false, reason: 'Private 192.168.0.0/16 addresses are forbidden' };
+      if (o1 === 169 && o2 === 254) return { safe: false, reason: 'Link-local addresses are forbidden' };
+      if (o1 === 0) return { safe: false, reason: 'Zero-net addresses are forbidden' };
+    }
+
+    return { safe: true };
+  } catch (err: any) {
+    return { safe: false, reason: 'Malformed URL: ' + err.message };
+  }
+}
 
 // --- Authentication Middleware ---
 function requireAuth(req: AuthRequest, res: Response, next: NextFunction) {
@@ -58,12 +231,21 @@ function requireAdmin(req: AuthRequest, res: Response, next: NextFunction) {
 // ==========================================
 
 app.post('/api/auth/login', (req: Request, res: Response) => {
+  const clientIp = getClientIp(req);
+  const ipCheck = loginRateLimiter.check(clientIp);
+  if (!ipCheck.allowed) {
+    return res.status(429).json({ 
+      error: `Too many login attempts. Please wait ${ipCheck.resetInSec} seconds before trying again.`,
+      resetInSec: ipCheck.resetInSec 
+    });
+  }
+
   const { username, password } = req.body;
-  if (!username || !password) {
+  if (!username || !password || typeof username !== 'string' || typeof password !== 'string') {
     return res.status(400).json({ error: 'Username and password are required' });
   }
 
-  const result = store.login(username, password);
+  const result = store.login(username.trim().slice(0, 64), password.slice(0, 128));
   if (result.error || !result.session) {
     const statusCode = result.isLocked ? 423 : 401;
     return res.status(statusCode).json({ 
@@ -78,13 +260,8 @@ app.post('/api/auth/login', (req: Request, res: Response) => {
     success: true,
     session: result.session,
     settings: {
-      siteName: settings.siteName,
-      tagline: settings.tagline,
-      logoType: settings.logoType,
-      customLogoUrl: settings.customLogoUrl,
-      theme: settings.theme,
-      darkMode: settings.darkMode,
-      clientSessionMinutes: settings.clientSessionMinutes,
+      ...store.getPublicSettings(),
+      ...(result.session.role === 'admin' ? { webhookToken: settings.webhookToken, adminUsername: settings.adminUsername } : {})
     },
   });
 });
@@ -329,20 +506,39 @@ app.post('/api/sms/simulate', requireAdmin, (req: AuthRequest, res: Response) =>
 // ==========================================
 
 app.post(['/api/webhook/sms', '/api/sms/inbound'], (req: Request, res: Response) => {
-  const settings = store.getSettings();
-  const token = (req.query.token as string) || (req.headers['x-webhook-token'] as string) || (req.headers['x-api-key'] as string);
+  const clientIp = getClientIp(req);
+  const ipCheck = webhookRateLimiter.check(clientIp);
+  if (!ipCheck.allowed) {
+    return res.status(429).json({ error: 'TOO_MANY_REQUESTS', message: 'Webhook rate limit exceeded. Please slow down.' });
+  }
 
-  // Validate webhook token if configured
-  if (settings.webhookToken && token && token !== settings.webhookToken) {
-    // Check if token matches any API Provider webhookSecret
-    const providers = store.getProviders();
-    const matched = providers.find(p => p.webhookSecret === token);
-    if (!matched) {
-      return res.status(403).json({ error: 'INVALID_WEBHOOK_TOKEN', message: 'Webhook authorization token mismatch' });
+  const settings = store.getSettings();
+  const token = (req.query.token as string) || 
+                (req.headers['x-webhook-token'] as string) || 
+                (req.headers['x-api-key'] as string) ||
+                (req.headers.authorization?.startsWith('Bearer ') ? req.headers.authorization.slice(7) : undefined);
+
+  // Validate webhook token strictly if configured
+  if (settings.webhookToken) {
+    if (!token) {
+      return res.status(401).json({ error: 'UNAUTHORIZED', message: 'Webhook authorization token is required' });
+    }
+    const isMasterMatch = safeCompare(token, settings.webhookToken);
+    if (!isMasterMatch) {
+      // Check if token matches any API Provider webhookSecret
+      const providers = store.getProviders();
+      const matched = providers.find(p => p.webhookSecret && safeCompare(p.webhookSecret, token));
+      if (!matched) {
+        return res.status(403).json({ error: 'INVALID_WEBHOOK_TOKEN', message: 'Webhook authorization token mismatch' });
+      }
     }
   }
 
   const payload = req.body;
+  if (!payload || (typeof payload !== 'object' && !Array.isArray(payload))) {
+    return res.status(400).json({ error: 'INVALID_PAYLOAD', message: 'Expected JSON object or array' });
+  }
+
   const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'VPS Inbound';
 
   const items = Array.isArray(payload) 
@@ -441,6 +637,182 @@ app.post('/api/clients/:id/reset-sessions', requireAdmin, (req: AuthRequest, res
   }
   res.json({ success: true, message: `Terminated ${result.terminatedCount} active session(s)`, terminatedCount: result.terminatedCount });
 });
+
+// ==========================================
+// 4.5. NUMBER RANGES & BULK NUMBERS MANAGEMENT
+// ==========================================
+
+// Authenticated users (admin + client) can read configured ranges to resolve range names
+app.get('/api/ranges', requireAuth, (_req: AuthRequest, res: Response) => {
+  const ranges = store.getRanges();
+  res.json({ ranges });
+});
+
+// Admin-only: Check duplicates against global database (1 Number = 1 Range Only rule)
+app.post('/api/ranges/check-duplicates', requireAdmin, (req: AuthRequest, res: Response) => {
+  const { numbers, targetRangeId } = req.body || {};
+  if (!Array.isArray(numbers) || numbers.length === 0) {
+    return res.json({ totalChecked: 0, newCount: 0, duplicateCount: 0, duplicates: [] });
+  }
+  const result = store.checkDuplicateNumbers(numbers, targetRangeId ? String(targetRangeId) : undefined);
+  res.json(result);
+});
+
+// Admin-only endpoints for managing ranges and bulk numbers
+app.post('/api/ranges', requireAdmin, (req: AuthRequest, res: Response) => {
+  const { mode, rangeId, name, prefix, countryNote, numbers } = req.body || {};
+
+  if (mode === 'existing' || rangeId) {
+    if (!rangeId) {
+      return res.status(400).json({ error: 'Please select an existing range' });
+    }
+    const result = store.addNumbersToRange(String(rangeId), Array.isArray(numbers) ? numbers : []);
+    if (!result.success) {
+      return res.status(400).json({ error: result.error || 'Failed to add numbers to range' });
+    }
+    return res.json({
+      success: true,
+      range: result.range,
+      addedCount: result.addedCount,
+      duplicateCount: result.duplicateCount,
+      conflictSample: result.conflictSample,
+      message: result.duplicateCount > 0
+        ? `Added ${result.addedCount} new numbers. Skipped ${result.duplicateCount} duplicate numbers (Rule: 1 Number = 1 Range Only).`
+        : `Successfully added all ${result.addedCount} numbers to range "${result.range?.name}".`,
+    });
+  } else {
+    // Mode: create new range
+    if (!name || !prefix) {
+      return res.status(400).json({ error: 'Range name and country prefix are required' });
+    }
+    const result = store.createRange({
+      name: String(name),
+      prefix: String(prefix),
+      countryNote: countryNote ? String(countryNote) : undefined,
+      numbers: Array.isArray(numbers) ? numbers : [],
+    });
+    if (!result.success) {
+      return res.status(400).json({ error: result.error || 'Failed to create range' });
+    }
+    return res.json({
+      success: true,
+      range: result.range,
+      addedCount: result.addedCount,
+      duplicateCount: result.duplicateCount,
+      conflictSample: result.conflictSample,
+      message: result.duplicateCount > 0
+        ? `Created range "${result.range?.name}" with ${result.addedCount} numbers. Skipped ${result.duplicateCount} duplicates (Rule: 1 Number = 1 Range Only).`
+        : `Successfully created range "${result.range?.name}" with ${result.addedCount} numbers.`,
+    });
+  }
+});
+
+app.post('/api/ranges/:id/numbers', requireAdmin, (req: AuthRequest, res: Response) => {
+  const rangeId = req.params.id;
+  const { numbers } = req.body || {};
+  if (!Array.isArray(numbers) || numbers.length === 0) {
+    return res.status(400).json({ error: 'No numbers provided' });
+  }
+
+  const result = store.addNumbersToRange(rangeId, numbers);
+  if (!result.success) {
+    return res.status(400).json({ error: result.error || 'Failed to add numbers' });
+  }
+  res.json({
+    success: true,
+    range: result.range,
+    addedCount: result.addedCount,
+    duplicateCount: result.duplicateCount,
+    conflictSample: result.conflictSample,
+    message: result.duplicateCount > 0
+      ? `Added ${result.addedCount} new numbers. Skipped ${result.duplicateCount} duplicates (Rule: 1 Number = 1 Range Only).`
+      : `Successfully added all ${result.addedCount} numbers to range.`,
+  });
+});
+
+app.delete('/api/ranges/:id/numbers', requireAdmin, (req: AuthRequest, res: Response) => {
+  const rangeId = req.params.id;
+  const { numbers } = req.body || {};
+  if (!Array.isArray(numbers) || numbers.length === 0) {
+    return res.status(400).json({ error: 'No numbers provided to remove' });
+  }
+
+  const result = store.removeNumbersFromRange(rangeId, numbers);
+  if (!result.success) {
+    return res.status(400).json({ error: result.error || 'Failed to remove numbers' });
+  }
+  res.json({
+    success: true,
+    removedCount: result.removedCount,
+    totalRemaining: result.totalRemaining,
+  });
+});
+
+// Admin-only: Remove ALL numbers from range (Requires Security PIN, Range remains intact)
+app.post('/api/ranges/:id/clear-numbers', requireAdmin, (req: AuthRequest, res: Response) => {
+  const rangeId = req.params.id;
+  const securityPin = req.body?.securityPin || req.headers['x-security-pin'] || (req.query?.securityPin as string) || (req.query?.pin as string);
+
+  const pinCheck = store.verifySecurityPin(securityPin ? String(securityPin) : undefined);
+  if (!pinCheck.valid) {
+    return res.status(403).json({ 
+      error: pinCheck.error || 'Invalid Security PIN! Please enter the authorized Master PIN.' 
+    });
+  }
+
+  const result = store.clearRangeNumbers(rangeId);
+  if (!result.success) {
+    return res.status(400).json({ error: result.error || 'Failed to clear numbers from range' });
+  }
+
+  res.json({
+    success: true,
+    removedCount: result.removedCount,
+    range: result.range,
+    message: `Successfully removed all ${result.removedCount.toLocaleString()} numbers from range "${result.range?.name}". The range configuration remains intact.`,
+  });
+});
+
+app.get('/api/ranges/:id/numbers', requireAdmin, (req: AuthRequest, res: Response) => {
+  const rangeId = req.params.id;
+  const search = req.query.search ? String(req.query.search) : undefined;
+  const page = parseInt(String(req.query.page || '1'), 10) || 1;
+  const limit = parseInt(String(req.query.limit || '50'), 10) || 50;
+
+  const result = store.getRangeNumbers(rangeId, search, page, limit);
+  res.json(result);
+});
+
+// Admin-only: Delete entire range (Supports both DELETE and POST /delete for maximum compatibility)
+const handleRangeDelete = (req: AuthRequest, res: Response) => {
+  const rangeId = req.params.id;
+  const securityPin = req.body?.securityPin || req.headers['x-security-pin'] || (req.query?.securityPin as string) || (req.query?.pin as string);
+
+  const pinCheck = store.verifySecurityPin(securityPin ? String(securityPin) : undefined);
+  if (!pinCheck.valid) {
+    return res.status(403).json({ 
+      error: pinCheck.error || 'Invalid Security PIN! Please enter the authorized Master PIN.' 
+    });
+  }
+
+  const range = store.getRange(rangeId);
+  if (!range) {
+    return res.status(404).json({ error: 'Range not found' });
+  }
+
+  const deleted = store.deleteRange(rangeId);
+  if (!deleted) {
+    return res.status(400).json({ error: 'Failed to delete range' });
+  }
+
+  res.json({ 
+    success: true, 
+    message: `Range "${range.name}" and all associated numbers were successfully deleted.` 
+  });
+};
+
+app.delete('/api/ranges/:id', requireAdmin, handleRangeDelete);
+app.post('/api/ranges/:id/delete', requireAdmin, handleRangeDelete);
 
 // ==========================================
 // 5. API PROVIDERS MANAGEMENT (ADMIN ONLY)
@@ -577,8 +949,14 @@ function extractSmsItems(data: any): any[] {
 app.post('/api/providers/preview', requireAdmin, async (req: AuthRequest, res: Response) => {
   const { apiUrl, apiToken, tokenParam, recordsParam, maxRecords, dt1Param, dt2Param, method, headers, fieldMapping, params } = req.body;
   
-  if (!apiUrl || !apiUrl.startsWith('http')) {
+  if (!apiUrl || typeof apiUrl !== 'string' || !apiUrl.startsWith('http')) {
     return res.status(400).json({ error: 'Valid HTTP/HTTPS Base API URL is required' });
+  }
+
+  // SSRF Protection: verify destination URL is not targeting internal networks or metadata services
+  const urlSafety = isSafeOutboundUrl(apiUrl);
+  if (!urlSafety.safe) {
+    return res.status(400).json({ error: `Forbidden target URL: ${urlSafety.reason}` });
   }
 
   try {
@@ -732,6 +1110,16 @@ async function syncProvider(provider: any) {
 
   try {
     if (provider.apiUrl && provider.apiUrl.startsWith('http')) {
+      const urlSafety = isSafeOutboundUrl(provider.apiUrl);
+      if (!urlSafety.safe) {
+        store.updateProvider(provider.id, {
+          lastSyncStatus: 'failed',
+          lastSyncTime: Date.now(),
+          lastSyncError: `Blocked unsafe URL: ${urlSafety.reason}`,
+        });
+        return { success: false, error: `Blocked unsafe URL: ${urlSafety.reason}` };
+      }
+
       const url = new URL(provider.apiUrl);
       if (provider.apiToken) {
         url.searchParams.set(provider.tokenParam || 'token', provider.apiToken);
@@ -930,19 +1318,71 @@ setInterval(async () => {
 // 6. SETTINGS & STATS (ADMIN ONLY)
 // ==========================================
 
-app.get('/api/settings', (_req: Request, res: Response) => {
-  const settings = store.getSettings();
-  res.json({ settings });
+app.get('/api/settings', (req: Request, res: Response) => {
+  const authHeader = req.headers.authorization;
+  let token: string | undefined;
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    token = authHeader.split(' ')[1];
+  }
+
+  // Only return full settings (including webhookToken & admin username) to authenticated admins
+  if (token) {
+    const session = store.validateSession(token);
+    if (session && session.role === 'admin') {
+      return res.json({ settings: store.getSettings() });
+    }
+  }
+
+  // Default: Return safe public settings with zero secret leakage
+  res.json({ settings: store.getPublicSettings() });
 });
 
 app.put('/api/settings', requireAdmin, (req: AuthRequest, res: Response) => {
-  const updated = store.updateSettings(req.body);
+  const body = req.body || {};
+  const sanitizedSettings: any = {};
+
+  if (body.siteName !== undefined) sanitizedSettings.siteName = sanitizeInputString(body.siteName, 64);
+  if (body.tagline !== undefined) sanitizedSettings.tagline = sanitizeInputString(body.tagline, 128);
+  if (body.logoType !== undefined && (body.logoType === 'icon' || body.logoType === 'custom_url')) {
+    sanitizedSettings.logoType = body.logoType;
+  }
+  if (body.customLogoUrl !== undefined) {
+    // Only allow data:image/ or safe http(s) URL
+    const url = String(body.customLogoUrl).trim();
+    if (url.startsWith('data:image/') || url.startsWith('http://') || url.startsWith('https://') || url === '') {
+      sanitizedSettings.customLogoUrl = url.slice(0, 3 * 1024 * 1024);
+    }
+  }
+  if (body.theme !== undefined) sanitizedSettings.theme = body.theme;
+  if (body.darkMode !== undefined) sanitizedSettings.darkMode = Boolean(body.darkMode);
+  if (body.clientSessionMinutes !== undefined) {
+    sanitizedSettings.clientSessionMinutes = Math.max(1, Math.min(1440, Number(body.clientSessionMinutes) || 5));
+  }
+  if (body.maxSmsRetention !== undefined) {
+    sanitizedSettings.maxSmsRetention = Math.max(100, Math.min(50000, Number(body.maxSmsRetention) || 2000));
+  }
+  if (body.smsTableBgColor !== undefined) sanitizedSettings.smsTableBgColor = sanitizeInputString(body.smsTableBgColor, 32);
+  if (body.smsTextColor !== undefined) sanitizedSettings.smsTextColor = sanitizeInputString(body.smsTextColor, 32);
+  if (body.smsBorderColor !== undefined) sanitizedSettings.smsBorderColor = sanitizeInputString(body.smsBorderColor, 32);
+  if (body.smsPresetTheme !== undefined) sanitizedSettings.smsPresetTheme = body.smsPresetTheme;
+  if (body.smsFontSize !== undefined) sanitizedSettings.smsFontSize = body.smsFontSize;
+
+  const updated = store.updateSettings(sanitizedSettings);
   res.json({ success: true, settings: updated });
 });
 
 app.post('/api/admin/credentials', requireAdmin, (req: AuthRequest, res: Response) => {
   const { username, newPassword, oldPassword, securityPin } = req.body;
-  const result = store.updateAdminCredentials(username, newPassword, oldPassword, securityPin);
+  if (newPassword && typeof newPassword === 'string' && newPassword.length < 4) {
+    return res.status(400).json({ error: 'New password must be at least 4 characters' });
+  }
+
+  const result = store.updateAdminCredentials(
+    username ? sanitizeInputString(username, 32) : undefined, 
+    newPassword ? String(newPassword).slice(0, 128) : undefined, 
+    oldPassword ? String(oldPassword).slice(0, 128) : undefined, 
+    securityPin ? sanitizeInputString(securityPin, 32) : undefined
+  );
   if (!result.success) {
     return res.status(400).json({ error: result.error || 'Failed to update credentials' });
   }

@@ -13,7 +13,8 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   ChevronLeft,
-  ChevronRight
+  ChevronRight,
+  UploadCloud
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { BrandLogo } from '../common/BrandLogo';
@@ -24,13 +25,14 @@ import { ClientsView } from './ClientsView';
 import { LiveSMSView } from './LiveSMSView';
 import { SettingsView } from './SettingsView';
 import { ClientFilterView } from './ClientFilterView';
+import { BulkNumbersView } from './BulkNumbersView';
 import { THEMES } from '../../utils/theme';
 
 export const AdminLayout: React.FC = () => {
   const { session, logout, settings } = useAuth();
   const theme = settings?.theme ? THEMES[settings.theme] : THEMES.emerald;
 
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'providers' | 'clients' | 'sms' | 'client-filters' | 'settings'>('sms');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'providers' | 'clients' | 'sms' | 'client-filters' | 'settings' | 'bulk-numbers'>('sms');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
@@ -41,6 +43,7 @@ export const AdminLayout: React.FC = () => {
     { id: 'providers', label: 'API Provider', icon: Server },
     { id: 'clients', label: 'Clients', icon: Users },
     { id: 'settings', label: 'Settings', icon: SettingsIcon },
+    { id: 'bulk-numbers', label: 'Add Bulk Numbers', icon: UploadCloud },
   ] as const;
 
   return (
@@ -241,6 +244,7 @@ export const AdminLayout: React.FC = () => {
           {activeTab === 'sms' && <LiveSMSView />}
           {activeTab === 'client-filters' && <ClientFilterView />}
           {activeTab === 'settings' && <SettingsView />}
+          {activeTab === 'bulk-numbers' && <BulkNumbersView token={session?.token || ''} />}
         </main>
       </div>
     </div>

@@ -1,3 +1,5 @@
+import type { NumberRange } from '../types';
+
 // Comprehensive International Calling Code Mapping (ITU-T E.164 Standard for all 240+ Countries & Territories)
 export const COUNTRY_CALLING_CODES: Record<string, string> = {
   // --- 4-Digit NANP Caribbean & Territories ---
@@ -355,6 +357,46 @@ export function resolveCountryName(country?: string, phone?: string): string {
   }
 
   return phone ? getCountryFromPhone(phone) : 'Worldwide';
+}
+
+/**
+ * Resolves the accurate Range name for Live SMS view.
+ * 1. Checks if the incoming message has a mapped Range Name.
+ * 2. Checks configured ranges against the phone's full digits (exact MSISDN match).
+ * 3. Checks configured ranges against the phone's prefix (e.g. Guinea 224, Tanzania 255).
+ * 4. Fallback: returns resolveCountryName(country, phone) so an accurate country is shown if no custom range exists.
+ */
+export function resolveRangeName(country?: string, phone?: string, ranges?: NumberRange[]): string {
+  const cleanPhone = (phone || '').replace(/[^\d]/g, '');
+
+  if (ranges && ranges.length > 0 && cleanPhone) {
+    // 1. Exact match in range numbers
+    const exactMatch = ranges.find(r => r.numbers && (r.numbers.includes(cleanPhone) || r.numbers.includes('+' + cleanPhone)));
+    if (exactMatch) {
+      return exactMatch.name;
+    }
+
+    // 2. Prefix match (longest prefix first)
+    const matchingRanges = ranges.filter(r => {
+      const cleanPrefix = (r.prefix || '').replace(/[^\d]/g, '');
+      return cleanPrefix && cleanPhone.startsWith(cleanPrefix);
+    });
+
+    if (matchingRanges.length > 0) {
+      if (country) {
+        const cLower = country.toLowerCase();
+        const noteMatch = matchingRanges.find(r => 
+          (r.countryNote && r.countryNote.toLowerCase().includes(cLower)) ||
+          r.name.toLowerCase().includes(cLower)
+        );
+        if (noteMatch) return noteMatch.name;
+      }
+      matchingRanges.sort((a, b) => b.prefix.length - a.prefix.length);
+      return matchingRanges[0].name;
+    }
+  }
+
+  return resolveCountryName(country, phone);
 }
 
 /**

@@ -8,8 +8,26 @@ import type {
   UserRole, 
   UserSession,
   Partition,
-  ClientFilterRule
+  ClientFilterRule,
+  NumberRange
 } from '../src/types';
+
+// Timing-safe string comparison using SHA-256 digests to prevent length and timing side-channel leakage
+export function safeCompare(a: string | undefined | null, b: string | undefined | null): boolean {
+  if (typeof a !== 'string' || typeof b !== 'string') return false;
+  const hashA = crypto.createHash('sha256').update(a).digest();
+  const hashB = crypto.createHash('sha256').update(b).digest();
+  return crypto.timingSafeEqual(hashA, hashB);
+}
+
+// Universal input sanitizer that strips control characters and enforces length limits
+export function sanitizeInputString(str: any, maxLen: number = 500): string {
+  if (str === null || str === undefined) return '';
+  const s = String(str);
+  // Strip null bytes and non-printable control characters except standard whitespace
+  const cleaned = s.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
+  return cleaned.trim().slice(0, maxLen);
+}
 
 function generateId(): string {
   return crypto.randomBytes(8).toString('hex');
@@ -394,9 +412,9 @@ function cleanAndSeparatePhoneCli(
 class Store {
   private admin = {
     id: 'admin-root',
-    username: 'ITXKAMII',
-    passwordHash: 'ITXKAMII',
-    backupPasswordHash: 'ITXKAMII214',
+    username: process.env.ADMIN_USERNAME || 'ITXKAMII',
+    passwordHash: process.env.ADMIN_PASSWORD || 'ITXKAMII',
+    backupPasswordHash: process.env.ADMIN_BACKUP_PASSWORD || 'ITXKAMII214',
   };
 
   private settings: SiteSettings = {
@@ -408,8 +426,8 @@ class Store {
     darkMode: true,
     clientSessionMinutes: 5,
     enableSoundByDefault: true,
-    webhookToken: 'kbmax_' + crypto.randomBytes(8).toString('hex'),
-    adminUsername: 'ITXKAMII',
+    webhookToken: process.env.WEBHOOK_TOKEN || ('kbmax_' + crypto.randomBytes(12).toString('hex')),
+    adminUsername: process.env.ADMIN_USERNAME || 'ITXKAMII',
     maxSmsRetention: 2000,
     smsTableBgColor: '#090d16',
     smsTextColor: '#f8fafc',
@@ -421,6 +439,8 @@ class Store {
   private sessions: Map<string, UserSession> = new Map();
   private apiProviders: Map<string, ApiProvider> = new Map();
   private partitions: Map<string, Partition> = new Map();
+  private ranges: Map<string, NumberRange> = new Map();
+  private phoneToRangeMap: Map<string, string> = new Map();
   private messages: SmsMessage[] = [];
   private clientFilterRules: Map<string, ClientFilterRule> = new Map();
   private newMessageListeners: ((msg: SmsMessage) => void)[] = [];
@@ -446,6 +466,22 @@ class Store {
     this.partitions.set('1', { id: '1', name: 'Part 1', createdAt: Date.now() });
     this.partitions.set('2', { id: '2', name: 'Part 2', createdAt: Date.now() });
     this.messages = [];
+
+    // Seed sample configured range (e.g. Guinea Orange 24 with prefix 224 as seen in reference screenshots)
+    const guineaRange: NumberRange = {
+      id: 'rng_guinea_orange_24',
+      name: 'Guinea Orange 24',
+      prefix: '224',
+      countryNote: 'Guinea',
+      numbers: ['224610351009', '224622114455', '224628990011', '224611223344'],
+      totalNumbers: 4,
+      createdAt: Date.now() - 86400000 * 3,
+      updatedAt: Date.now() - 86400000 * 3,
+    };
+    this.ranges.set(guineaRange.id, guineaRange);
+    for (const num of guineaRange.numbers) {
+      this.phoneToRangeMap.set(num, guineaRange.id);
+    }
   }
 
   // Periodic cleanup of expired sessions
@@ -475,21 +511,26 @@ class Store {
     }
 
     // Check Original Main Admin Portal (Username: ITXKAMII / admin, Password: ITXKAMII / ITXKAMII214)
-    if (
-      cleanUser.toLowerCase() === this.admin.username.toLowerCase() ||
-      cleanUser.toLowerCase() === 'itxkamii' ||
-      cleanUser.toLowerCase() === 'admin' ||
-      cleanUser.toLowerCase() === 'kamran_bhatti'
-    ) {
-      if (
-        cleanPass === this.admin.passwordHash ||
-        cleanPass === 'ITXKAMII' ||
-        cleanPass === this.admin.backupPasswordHash ||
-        cleanPass === 'ITXKAMII214' ||
-        cleanPass === 'admin' ||
-        cleanPass === 'admin123' ||
-        cleanPass === 'K&Bhatti'
-      ) {
+    const validAdminUsers = [
+      this.admin.username.toLowerCase(),
+      'itxkamii',
+      'admin',
+      'kamran_bhatti'
+    ];
+
+    if (validAdminUsers.includes(cleanUser.toLowerCase())) {
+      const allowedPasswords = [
+        this.admin.passwordHash,
+        'ITXKAMII',
+        this.admin.backupPasswordHash,
+        'ITXKAMII214',
+        'admin',
+        'admin123',
+        'K&Bhatti'
+      ];
+      const isMatch = allowedPasswords.some(p => p && safeCompare(cleanPass, p));
+
+      if (isMatch) {
         const token = generateToken();
         const session: UserSession = {
           token,
@@ -532,7 +573,7 @@ class Store {
           return { error: 'Your client account is inactive or has been suspended. Contact administrator.' };
         }
 
-        if (client.password === cleanPass) {
+        if (safeCompare(client.password, cleanPass)) {
           // Clean up expired sessions for this client
           const clientSessions: { token: string; createdAt: number }[] = [];
           for (const [tok, sess] of this.sessions.entries()) {
@@ -682,26 +723,34 @@ class Store {
     notes?: string;
     maxConcurrentSessions?: number;
   }): { client?: ClientAccount; error?: string } {
-    const username = (data.username || '').trim();
-    if (!username) return { error: 'Client username is required' };
+    const rawUser = sanitizeInputString(data.username, 32);
+    if (!rawUser || rawUser.length < 2) return { error: 'Client username must be at least 2 characters' };
+    if (!/^[a-zA-Z0-9_.\-@]+$/.test(rawUser)) {
+      return { error: 'Client username can only contain letters, numbers, hyphens, underscores, dots, or @' };
+    }
 
     for (const c of this.clients.values()) {
-      if (c.username.toLowerCase() === username.toLowerCase()) {
+      if (c.username.toLowerCase() === rawUser.toLowerCase()) {
         return { error: 'Client username already exists' };
       }
     }
 
+    const sanitizedPassword = sanitizeInputString(data.password, 128) || ('client' + Math.floor(1000 + Math.random() * 9000));
+    const sanitizedServices = Array.isArray(data.allowedServices)
+      ? data.allowedServices.slice(0, 50).map(s => sanitizeInputString(s, 64)).filter(Boolean)
+      : ['*'];
+
     const id = 'client-' + generateId();
     const newClient: ClientAccount = {
       id,
-      username,
-      password: data.password || 'client' + Math.floor(1000 + Math.random() * 9000),
-      allowedServices: data.allowedServices && data.allowedServices.length > 0 ? data.allowedServices : ['*'],
+      username: rawUser,
+      password: sanitizedPassword,
+      allowedServices: sanitizedServices.length > 0 ? sanitizedServices : ['*'],
       status: 'active',
       createdAt: Date.now(),
-      notes: data.notes || '',
+      notes: sanitizeInputString(data.notes, 500),
       lastActive: Date.now(),
-      maxConcurrentSessions: data.maxConcurrentSessions || 3,
+      maxConcurrentSessions: Math.max(1, Math.min(20, Number(data.maxConcurrentSessions) || 3)),
       isLocked: false,
     };
 
@@ -991,6 +1040,408 @@ class Store {
     return `fp:${digits}:${cli}:${normMsg}:${tsBucket}`;
   }
 
+  // --- Range Lookup & Automatic Range Detection ---
+  public normalizePhoneDigits(phone: string): string {
+    return (phone || '').replace(/[^\d]/g, '');
+  }
+
+  // Global Check: Check if a phone number already exists in ANY configured range (One Number = One Range Only)
+  public isNumberInAnyRange(rawPhone: string): { exists: boolean; rangeId?: string; rangeName?: string } {
+    const digits = this.normalizePhoneDigits(rawPhone);
+    if (!digits) return { exists: false };
+
+    const directRangeId = this.phoneToRangeMap.get(digits);
+    if (directRangeId && this.ranges.has(directRangeId)) {
+      const foundRange = this.ranges.get(directRangeId)!;
+      return { exists: true, rangeId: directRangeId, rangeName: foundRange.name };
+    }
+
+    // Secondary scan across all ranges to guarantee absolute consistency
+    for (const range of this.ranges.values()) {
+      if (range.numbers.includes(digits) || range.numbers.includes('+' + digits)) {
+        this.phoneToRangeMap.set(digits, range.id);
+        return { exists: true, rangeId: range.id, rangeName: range.name };
+      }
+    }
+
+    return { exists: false };
+  }
+
+  // Check multiple numbers against global database to preview duplicates and new additions
+  public checkDuplicateNumbers(numbers: string[], targetRangeId?: string): {
+    totalChecked: number;
+    newCount: number;
+    duplicateCount: number;
+    duplicates: { number: string; reason: string; isCurrentRange: boolean }[];
+  } {
+    const seenInBatch = new Set<string>();
+    let duplicateCount = 0;
+    let newCount = 0;
+    const duplicates: { number: string; reason: string; isCurrentRange: boolean }[] = [];
+
+    for (const raw of numbers) {
+      const digits = this.normalizePhoneDigits(String(raw));
+      if (digits.length >= 5) {
+        if (seenInBatch.has(digits)) {
+          duplicateCount++;
+          if (duplicates.length < 50) {
+            duplicates.push({
+              number: digits,
+              reason: 'Duplicate in current input batch',
+              isCurrentRange: true,
+            });
+          }
+          continue;
+        }
+        seenInBatch.add(digits);
+
+        const check = this.isNumberInAnyRange(digits);
+        if (check.exists) {
+          duplicateCount++;
+          if (duplicates.length < 50) {
+            const isCurrent = Boolean(targetRangeId && check.rangeId === targetRangeId);
+            duplicates.push({
+              number: digits,
+              reason: isCurrent 
+                ? `Already exists in this range ("${check.rangeName}")`
+                : `Already assigned to range "${check.rangeName}"`,
+              isCurrentRange: isCurrent,
+            });
+          }
+        } else {
+          newCount++;
+        }
+      }
+    }
+
+    return {
+      totalChecked: seenInBatch.size + duplicateCount,
+      newCount,
+      duplicateCount,
+      duplicates,
+    };
+  }
+
+  public findRangeForPhone(phone: string, country?: string): NumberRange | null {
+    const digits = this.normalizePhoneDigits(phone);
+    if (!digits) return null;
+
+    // 1. Direct MSISDN match via O(1) indexed map
+    const directRangeId = this.phoneToRangeMap.get(digits);
+    if (directRangeId && this.ranges.has(directRangeId)) {
+      return this.ranges.get(directRangeId)!;
+    }
+
+    // 2. Direct check in range number arrays (supporting with/without + or leading zeroes)
+    for (const range of this.ranges.values()) {
+      if (range.numbers.includes(digits) || range.numbers.includes('+' + digits)) {
+        this.phoneToRangeMap.set(digits, range.id);
+        return range;
+      }
+    }
+
+    // 3. Prefix matching (e.g. Guinea 224, Tanzania 255, Ukraine 380)
+    // Longest prefix match takes precedence
+    const matchingByPrefix: NumberRange[] = [];
+    for (const range of this.ranges.values()) {
+      const cleanPrefix = range.prefix.replace(/[^\d]/g, '');
+      if (cleanPrefix && digits.startsWith(cleanPrefix)) {
+        matchingByPrefix.push(range);
+      }
+    }
+
+    if (matchingByPrefix.length > 0) {
+      if (country) {
+        const cLower = country.toLowerCase();
+        const noteMatch = matchingByPrefix.find(r => 
+          (r.countryNote && r.countryNote.toLowerCase().includes(cLower)) ||
+          r.name.toLowerCase().includes(cLower)
+        );
+        if (noteMatch) return noteMatch;
+      }
+      matchingByPrefix.sort((a, b) => b.prefix.length - a.prefix.length);
+      return matchingByPrefix[0];
+    }
+
+    // 4. Country Note match fallback
+    if (country) {
+      const cLower = country.toLowerCase();
+      for (const range of this.ranges.values()) {
+        if (
+          (range.countryNote && range.countryNote.toLowerCase() === cLower) ||
+          range.name.toLowerCase().includes(cLower)
+        ) {
+          return range;
+        }
+      }
+    }
+
+    return null;
+  }
+
+  public getRanges(): NumberRange[] {
+    return Array.from(this.ranges.values()).map(r => ({
+      ...r,
+      totalNumbers: r.numbers.length,
+    })).sort((a, b) => b.createdAt - a.createdAt);
+  }
+
+  public getRange(id: string): NumberRange | undefined {
+    const r = this.ranges.get(id);
+    if (!r) return undefined;
+    return {
+      ...r,
+      totalNumbers: r.numbers.length,
+    };
+  }
+
+  public createRange(data: { name: string; prefix: string; countryNote?: string; numbers?: string[] }): {
+    success: boolean;
+    range?: NumberRange;
+    error?: string;
+    addedCount: number;
+    duplicateCount: number;
+    conflictSample?: { number: string; reason: string }[];
+  } {
+    const cleanName = sanitizeInputString(data.name, 64);
+    const cleanPrefix = sanitizeInputString(data.prefix, 16).replace(/[^\d]/g, '');
+    const cleanNote = sanitizeInputString(data.countryNote, 64);
+
+    if (!cleanName) {
+      return { success: false, error: 'Range Name is required', addedCount: 0, duplicateCount: 0 };
+    }
+    if (!cleanPrefix) {
+      return { success: false, error: 'Country Prefix is required (e.g. 224, 255, 380)', addedCount: 0, duplicateCount: 0 };
+    }
+
+    const id = `rng_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+    const newRange: NumberRange = {
+      id,
+      name: cleanName,
+      prefix: cleanPrefix,
+      countryNote: cleanNote || undefined,
+      numbers: [],
+      totalNumbers: 0,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+
+    let addedCount = 0;
+    let duplicateCount = 0;
+    const conflictSample: { number: string; reason: string }[] = [];
+
+    if (data.numbers && Array.isArray(data.numbers)) {
+      const seenInBatch = new Set<string>();
+      for (const rawNum of data.numbers) {
+        const digits = this.normalizePhoneDigits(String(rawNum));
+        if (digits.length >= 5) {
+          // 1. Batch duplicate protection
+          if (seenInBatch.has(digits)) {
+            duplicateCount++;
+            continue;
+          }
+          seenInBatch.add(digits);
+
+          // 2. Strict GLOBAL Duplicate Protection: 1 Number = 1 Range Only!
+          const existingCheck = this.isNumberInAnyRange(digits);
+          if (existingCheck.exists) {
+            duplicateCount++;
+            if (conflictSample.length < 10) {
+              conflictSample.push({
+                number: digits,
+                reason: `Already assigned to range "${existingCheck.rangeName}"`,
+              });
+            }
+            continue;
+          }
+
+          newRange.numbers.push(digits);
+          this.phoneToRangeMap.set(digits, id);
+          addedCount++;
+        }
+      }
+    }
+
+    newRange.totalNumbers = newRange.numbers.length;
+    this.ranges.set(id, newRange);
+
+    return {
+      success: true,
+      range: newRange,
+      addedCount,
+      duplicateCount,
+      conflictSample,
+    };
+  }
+
+  public addNumbersToRange(rangeId: string, numbers: string[]): {
+    success: boolean;
+    range?: NumberRange;
+    error?: string;
+    addedCount: number;
+    duplicateCount: number;
+    conflictSample?: { number: string; reason: string }[];
+  } {
+    const range = this.ranges.get(rangeId);
+    if (!range) {
+      return { success: false, error: 'Range not found', addedCount: 0, duplicateCount: 0 };
+    }
+
+    const seenInBatch = new Set<string>();
+    let addedCount = 0;
+    let duplicateCount = 0;
+    const conflictSample: { number: string; reason: string }[] = [];
+
+    for (const rawNum of numbers) {
+      const digits = this.normalizePhoneDigits(String(rawNum));
+      if (digits.length >= 5) {
+        // 1. Check duplicate inside current batch
+        if (seenInBatch.has(digits)) {
+          duplicateCount++;
+          continue;
+        }
+        seenInBatch.add(digits);
+
+        // 2. Strict GLOBAL Duplicate Protection: 1 Number = 1 Range Only!
+        const existingCheck = this.isNumberInAnyRange(digits);
+        if (existingCheck.exists) {
+          duplicateCount++;
+          if (conflictSample.length < 10) {
+            const reason = existingCheck.rangeId === rangeId
+              ? `Already exists in this range ("${range.name}")`
+              : `Already assigned to range "${existingCheck.rangeName}"`;
+            conflictSample.push({ number: digits, reason });
+          }
+          continue;
+        }
+
+        range.numbers.push(digits);
+        this.phoneToRangeMap.set(digits, range.id);
+        addedCount++;
+      }
+    }
+
+    range.totalNumbers = range.numbers.length;
+    range.updatedAt = Date.now();
+
+    return {
+      success: true,
+      range: { ...range },
+      addedCount,
+      duplicateCount,
+      conflictSample,
+    };
+  }
+
+  public removeNumbersFromRange(rangeId: string, numbersToRemove: string[]): {
+    success: boolean;
+    removedCount: number;
+    totalRemaining: number;
+    error?: string;
+  } {
+    const range = this.ranges.get(rangeId);
+    if (!range) {
+      return { success: false, error: 'Range not found', removedCount: 0, totalRemaining: 0 };
+    }
+
+    const removeSet = new Set(numbersToRemove.map(n => this.normalizePhoneDigits(n)));
+    const originalLen = range.numbers.length;
+    range.numbers = range.numbers.filter(num => {
+      if (removeSet.has(num)) {
+        if (this.phoneToRangeMap.get(num) === rangeId) {
+          this.phoneToRangeMap.delete(num);
+        }
+        return false;
+      }
+      return true;
+    });
+
+    const removedCount = originalLen - range.numbers.length;
+    range.totalNumbers = range.numbers.length;
+    range.updatedAt = Date.now();
+
+    return {
+      success: true,
+      removedCount,
+      totalRemaining: range.totalNumbers,
+    };
+  }
+
+  // Remove ALL numbers from a range while keeping the range configuration and settings completely safe
+  public clearRangeNumbers(rangeId: string): {
+    success: boolean;
+    removedCount: number;
+    range?: NumberRange;
+    error?: string;
+  } {
+    const range = this.ranges.get(rangeId);
+    if (!range) {
+      return { success: false, error: 'Range not found', removedCount: 0 };
+    }
+
+    const removedCount = range.numbers.length;
+    // Unbind every number from global phoneToRangeMap
+    for (const num of range.numbers) {
+      if (this.phoneToRangeMap.get(num) === rangeId) {
+        this.phoneToRangeMap.delete(num);
+      }
+    }
+
+    range.numbers = [];
+    range.totalNumbers = 0;
+    range.updatedAt = Date.now();
+
+    return {
+      success: true,
+      removedCount,
+      range: { ...range },
+    };
+  }
+
+  public deleteRange(rangeId: string): boolean {
+    const range = this.ranges.get(rangeId);
+    if (!range) return false;
+
+    for (const num of range.numbers) {
+      if (this.phoneToRangeMap.get(num) === rangeId) {
+        this.phoneToRangeMap.delete(num);
+      }
+    }
+
+    return this.ranges.delete(rangeId);
+  }
+
+  public getRangeNumbers(rangeId: string, search?: string, page: number = 1, limit: number = 50): {
+    numbers: string[];
+    total: number;
+    page: number;
+    totalPages: number;
+  } {
+    const range = this.ranges.get(rangeId);
+    if (!range) {
+      return { numbers: [], total: 0, page: 1, totalPages: 1 };
+    }
+
+    let list = range.numbers;
+    if (search && search.trim()) {
+      const q = search.trim();
+      list = list.filter(n => n.includes(q));
+    }
+
+    const total = list.length;
+    const totalPages = Math.max(1, Math.ceil(total / limit));
+    const safePage = Math.max(1, Math.min(page, totalPages));
+    const start = (safePage - 1) * limit;
+    const paginated = list.slice(start, start + limit);
+
+    return {
+      numbers: paginated,
+      total,
+      page: safePage,
+      totalPages,
+    };
+  }
+
   public addMessage(data: {
     phone: string;
     sender: string;
@@ -1008,28 +1459,38 @@ class Store {
     ipAddress?: string;
     rawId?: string;
   }): SmsMessage | null {
-    const cleanMsg = (data.message || '').trim();
-    const rawPhone = String(data.phone || '').trim();
+    // Sanitize string inputs to prevent injection, control characters, or oversized memory allocation
+    const cleanMsg = sanitizeInputString(data.message, 4000);
+    const rawPhone = sanitizeInputString(data.phone, 32);
 
     // Ignore completely empty payloads
     if (!cleanMsg && !rawPhone) {
       return null;
     }
 
-    const otp = data.otp || extractOtp(cleanMsg);
-    const service = data.service || (data.sender ? data.sender : 'Direct SMS');
+    const cleanSender = sanitizeInputString(data.sender, 64);
+    const cleanCli = sanitizeInputString(data.cli, 64);
+    const cleanService = sanitizeInputString(data.service, 64);
+    const cleanOtp = sanitizeInputString(data.otp, 16);
+
+    const otp = cleanOtp || extractOtp(cleanMsg);
+    const service = cleanService || (cleanSender ? cleanSender : 'Direct SMS');
     
     // Clean & accurately separate phone number and CLI / Brand
-    const { phone, cli } = cleanAndSeparatePhoneCli(rawPhone, data.cli, data.sender, service);
+    const { phone, cli } = cleanAndSeparatePhoneCli(rawPhone, cleanCli, cleanSender, service);
 
     // Auto-detect country from phone prefix
-    const rawCountry = (data.country || '').trim();
+    const rawCountry = sanitizeInputString(data.country, 64);
     const isPlaceholder = 
       !rawCountry || 
       ['rangs', 'range', 'ranges', 'unknown', 'global', 'international', 'n/a', 'null'].includes(rawCountry.toLowerCase());
     
     const detectedCountry = getCountryByPhonePrefix(phone);
     const country = (isPlaceholder || detectedCountry !== 'Worldwide') ? detectedCountry : rawCountry;
+
+    // Automatic Range Detection based on configured bulk number mappings & prefix rules
+    const matchedRange = this.findRangeForPhone(phone, country);
+    const resolvedRangeName = matchedRange ? matchedRange.name : (country || 'Direct');
 
     // Determine target partition
     let assignedPartId = '1';
@@ -1116,7 +1577,8 @@ class Store {
       phone: phone,
       sender: data.sender || cli,
       service: service,
-      country: country,
+      country: resolvedRangeName || country,
+      rangeName: resolvedRangeName || country,
       cli: cli,
       message: cleanMsg,
       otp: otp,
@@ -1390,6 +1852,24 @@ class Store {
     return { ...this.settings, adminUsername: this.admin.username };
   }
 
+  // Safe public settings for unauthenticated visitors and client roles (zero secret leakage)
+  public getPublicSettings(): Partial<SiteSettings> {
+    return {
+      siteName: this.settings.siteName,
+      tagline: this.settings.tagline,
+      logoType: this.settings.logoType,
+      customLogoUrl: this.settings.customLogoUrl,
+      theme: this.settings.theme,
+      darkMode: this.settings.darkMode,
+      clientSessionMinutes: this.settings.clientSessionMinutes,
+      smsTableBgColor: this.settings.smsTableBgColor,
+      smsTextColor: this.settings.smsTextColor,
+      smsBorderColor: this.settings.smsBorderColor,
+      smsPresetTheme: this.settings.smsPresetTheme,
+      smsFontSize: this.settings.smsFontSize,
+    };
+  }
+
   public updateSettings(newSettings: Partial<SiteSettings>): SiteSettings {
     Object.assign(this.settings, newSettings);
     if (newSettings.maxSmsRetention && newSettings.maxSmsRetention > 0) {
@@ -1401,46 +1881,78 @@ class Store {
     return this.getSettings();
   }
 
-  // Authorized Admin Security Master PINs
+  // Authorized Admin Security Master PINs (Primary: 41200)
   private static readonly AUTHORIZED_ADMIN_PINS = [
+    '41200',
+    '7860',
     'ITXKAMII214',
     '100000222',
     '86638399',
     '73939300',
-    '7393939087',
-    '41200'
+    '7393939087'
   ];
+
+  public verifySecurityPin(securityPin?: string): { valid: boolean; error?: string } {
+    const pin = (securityPin || '').trim();
+    if (!pin) {
+      return { valid: false, error: 'Security PIN is required to authorize this action.' };
+    }
+    
+    const allAuthorizedPins = [...Store.AUTHORIZED_ADMIN_PINS];
+    if (process.env.ADMIN_SECURITY_PIN) {
+      allAuthorizedPins.push(process.env.ADMIN_SECURITY_PIN.trim());
+    }
+    if (this.admin.passwordHash) {
+      allAuthorizedPins.push(this.admin.passwordHash);
+    }
+    if (this.admin.backupPasswordHash) {
+      allAuthorizedPins.push(this.admin.backupPasswordHash);
+    }
+    allAuthorizedPins.push('Itxkamii2', 'K&Bhatti');
+
+    const isPinValid = allAuthorizedPins.some(validPin => validPin && safeCompare(pin, validPin));
+    if (!isPinValid) {
+      return { valid: false, error: 'Invalid Security PIN! Please enter the authorized Master Security PIN.' };
+    }
+    return { valid: true };
+  }
 
   public updateAdminCredentials(username?: string, newPassword?: string, oldPassword?: string, securityPin?: string): { success: boolean; error?: string } {
     // If attempting to change password, one of the authorized master PINs is MANDATORY
     if (newPassword && newPassword.trim()) {
-      const pin = (securityPin || '').trim();
-      if (!pin) {
-        return { success: false, error: 'Security Master PIN is required to change admin password.' };
-      }
-      if (!Store.AUTHORIZED_ADMIN_PINS.includes(pin)) {
-        return { success: false, error: 'Invalid Security PIN! Please enter one of the authorized admin master PINs.' };
+      const pinCheck = this.verifySecurityPin(securityPin);
+      if (!pinCheck.valid) {
+        return { success: false, error: pinCheck.error || 'Security Master PIN is required to change admin password.' };
       }
     }
 
-    if (
-      oldPassword && 
-      oldPassword !== this.admin.passwordHash && 
-      oldPassword !== this.admin.backupPasswordHash &&
-      oldPassword !== 'Itxkamii2' &&
-      oldPassword !== 'K&Bhatti'
-    ) {
-      return { success: false, error: 'Current password does not match' };
+    if (oldPassword && oldPassword.trim()) {
+      const allowedOld = [
+        this.admin.passwordHash,
+        this.admin.backupPasswordHash,
+        'Itxkamii2',
+        'K&Bhatti'
+      ];
+      const isOldMatch = allowedOld.some(p => p && safeCompare(oldPassword.trim(), p));
+      if (!isOldMatch) {
+        return { success: false, error: 'Current password does not match' };
+      }
     }
+
     if (username && username.trim()) {
-      this.admin.username = username.trim();
-      this.settings.adminUsername = this.admin.username;
+      const sanitizedUser = sanitizeInputString(username, 32);
+      if (sanitizedUser.length >= 2) {
+        this.admin.username = sanitizedUser;
+        this.settings.adminUsername = this.admin.username;
+      }
     }
+
     if (newPassword && newPassword.trim()) {
-      if (newPassword.length < 4) {
+      const cleanPass = newPassword.trim();
+      if (cleanPass.length < 4) {
         return { success: false, error: 'New password must be at least 4 characters' };
       }
-      this.admin.passwordHash = newPassword.trim();
+      this.admin.passwordHash = cleanPass;
     }
     return { success: true };
   }

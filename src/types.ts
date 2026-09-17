@@ -32,6 +32,17 @@ export interface Partition {
   createdAt?: number;
 }
 
+export interface NumberRange {
+  id: string;
+  name: string;              // e.g. "Tanzania LX 26Aug", "Guinea Orange", "Ukraine Kyivstar"
+  prefix: string;            // e.g. "255", "224", "380"
+  countryNote?: string;      // e.g. "Tanzania", "Guinea", "Ukraine"
+  numbers: string[];         // Assigned phone numbers (MSISDNs)
+  totalNumbers: number;
+  createdAt: number;
+  updatedAt?: number;
+}
+
 export interface ApiProviderMapping {
   phoneField: string;
   senderField: string;
@@ -75,6 +86,7 @@ export interface SmsMessage {
   sender: string;
   service: string;
   country?: string;
+  rangeName?: string; // Automatically detected range name (e.g. Guinea Orange, Tanzania LX)
   cli?: string;
   message: string;
   otp?: string;
