@@ -367,16 +367,56 @@ export function resolveCountryName(country?: string, phone?: string): string {
  * 4. Fallback: returns resolveCountryName(country, phone) so an accurate country is shown if no custom range exists.
  */
 export function resolveRangeName(country?: string, phone?: string, ranges?: NumberRange[]): string {
-  const cleanPhone = (phone || '').replace(/[^\d]/g, '');
+  let cleanPhone = (phone || '').replace(/[^\d]/g, '');
+  if (cleanPhone.startsWith('00')) {
+    cleanPhone = cleanPhone.slice(2);
+  }
 
   if (ranges && ranges.length > 0 && cleanPhone) {
     // 1. Exact match in range numbers
-    const exactMatch = ranges.find(r => r.numbers && (r.numbers.includes(cleanPhone) || r.numbers.includes('+' + cleanPhone)));
+    const exactMatch = ranges.find(r => r.numbers && (
+      r.numbers.includes(cleanPhone) || 
+      r.numbers.includes('+' + cleanPhone) ||
+      (cleanPhone.startsWith('00') && r.numbers.includes(cleanPhone.slice(2)))
+    ));
     if (exactMatch) {
       return exactMatch.name;
     }
 
-    // 2. Prefix match (longest prefix first)
+    // 2. National to International and vice versa
+    for (const range of ranges) {
+      const cleanPrefix = (range.prefix || '').replace(/[^\d]/g, '');
+      if (cleanPrefix && range.numbers) {
+        // e.g. national 0610... -> prefix 224 + 610...
+        if (cleanPhone.startsWith('0') && cleanPhone.length >= 8) {
+          const intlCandidate = cleanPrefix + cleanPhone.slice(1);
+          if (range.numbers.includes(intlCandidate)) return range.name;
+        }
+        // e.g. local 610... -> prefix 224 + 610...
+        const intlCandidate2 = cleanPrefix + cleanPhone;
+        if (range.numbers.includes(intlCandidate2)) return range.name;
+
+        // Vice versa: range number saved local, incoming has prefix
+        if (cleanPhone.startsWith(cleanPrefix)) {
+          const localPart = cleanPhone.slice(cleanPrefix.length);
+          if (localPart && (range.numbers.includes(localPart) || range.numbers.includes('0' + localPart))) {
+            return range.name;
+          }
+        }
+      }
+    }
+
+    // 3. Suffix match (last 8 digits)
+    if (cleanPhone.length >= 8) {
+      const suffix8 = cleanPhone.slice(-8);
+      for (const range of ranges) {
+        if (range.numbers && range.numbers.some(n => n.endsWith(suffix8))) {
+          return range.name;
+        }
+      }
+    }
+
+    // 4. Prefix match (longest prefix first)
     const matchingRanges = ranges.filter(r => {
       const cleanPrefix = (r.prefix || '').replace(/[^\d]/g, '');
       return cleanPrefix && cleanPhone.startsWith(cleanPrefix);

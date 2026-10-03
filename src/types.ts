@@ -125,6 +125,7 @@ export interface SiteSettings {
   webhookToken: string;
   adminUsername: string;
   maxSmsRetention?: number;
+  clientMaxRetention?: number;
   // Live SMS Custom Color & Font Styling Options
   smsTableBgColor?: string;
   smsTextColor?: string;
@@ -137,9 +138,24 @@ export interface SiteSettings {
 export interface SystemStats {
   totalSms: number;
   todaySms: number;
+  yesterdaySms?: number;
+  thisWeekSms?: number;
+  thisMonthSms?: number;
+  dailyStats?: { date: string; count: number; label: string }[];
   activeClients: number;
   activeProviders: number;
   activeSessions: number;
   recentOtpCount: number;
   topServices: { service: string; count: number }[];
+}
+
+export interface SmsReportGroup {
+  hour?: string;
+  date?: string;
+  month?: string;
+  range?: string;
+  number?: string;
+  cli?: string;
+  count: number;
+  [key: string]: any;
 }

@@ -434,6 +434,7 @@ class Store {
     webhookToken: process.env.WEBHOOK_TOKEN || ('kbmax_' + crypto.randomBytes(12).toString('hex')),
     adminUsername: process.env.ADMIN_USERNAME || 'ITXKAMII',
     maxSmsRetention: 2000,
+    clientMaxRetention: 1000,
     smsTableBgColor: '#090d16',
     smsTextColor: '#f8fafc',
     smsBorderColor: '#1e293b',
@@ -449,6 +450,12 @@ class Store {
   private messages: SmsMessage[] = [];
   private clientFilterRules: Map<string, ClientFilterRule> = new Map();
   private newMessageListeners: ((msg: SmsMessage) => void)[] = [];
+
+  // Persistent cumulative counter that NEVER resets when logs are cleared
+  private cumulativeTotalSms: number = 0;
+  // Client log separation timestamps (cleared logs are hidden from client, but saved in admin)
+  private clientClearedAt: number = 0;
+  private clientClearedPart: Map<string, number> = new Map();
 
   // Robust Persistent Seen-Registry for Deduplication
   // Retains seen message signatures even across admin log clears to prevent old SMS re-syncing
@@ -484,6 +491,9 @@ class Store {
         clients: Array.from(this.clients.values()),
         ranges: Array.from(this.ranges.values()),
         clientFilterRules: Array.from(this.clientFilterRules.values()),
+        cumulativeTotalSms: Math.max(this.cumulativeTotalSms, this.messages.length),
+        clientClearedAt: this.clientClearedAt,
+        clientClearedPart: Array.from(this.clientClearedPart.entries()),
         messages: this.messages.slice(0, 3000),
         seenFingerprints: Array.from(this.seenFingerprints.entries()).slice(-15000),
       };
@@ -534,11 +544,16 @@ class Store {
             this.ranges.set(r.id, r);
             if (Array.isArray(r.numbers)) {
               for (const num of r.numbers) {
-                this.phoneToRangeMap.set(num, r.id);
+                const clean = this.normalizePhoneDigits(num);
+                if (clean && clean.length >= 5) {
+                  this.phoneToRangeMap.set(clean, r.id);
+                }
               }
             }
           }
         }
+        // Automatically audit and deduplicate on load to enforce 100% unique range numbers
+        this.auditAndDeduplicateAllRanges();
       }
       if (Array.isArray(data.clientFilterRules)) {
         this.clientFilterRules.clear();
@@ -548,6 +563,17 @@ class Store {
       }
       if (Array.isArray(data.messages)) {
         this.messages = data.messages;
+      }
+      if (typeof data.cumulativeTotalSms === 'number') {
+        this.cumulativeTotalSms = Math.max(data.cumulativeTotalSms, this.messages.length);
+      } else {
+        this.cumulativeTotalSms = this.messages.length;
+      }
+      if (typeof data.clientClearedAt === 'number') {
+        this.clientClearedAt = data.clientClearedAt;
+      }
+      if (Array.isArray(data.clientClearedPart)) {
+        this.clientClearedPart = new Map(data.clientClearedPart);
       }
       if (Array.isArray(data.seenFingerprints)) {
         this.seenFingerprints = new Map(data.seenFingerprints);
@@ -664,7 +690,7 @@ class Store {
           const remMin = Math.floor(remainingSec / 60);
           const remSec = remainingSec % 60;
           return {
-            error: `Client ID is temporarily locked for 15 minutes due to exceeding 3 concurrent users. Remaining time: ${remMin}m ${remSec}s. Kisi k pas open nahi hoga.`,
+            error: `Client ID is temporarily locked for 15 minutes due to exceeding 3 concurrent users. Remaining time: ${remMin}m ${remSec}s.`,
             isLocked: true,
             lockedUntil: client.lockedUntil,
           };
@@ -1162,23 +1188,36 @@ class Store {
 
   // --- Range Lookup & Automatic Range Detection ---
   public normalizePhoneDigits(phone: string): string {
-    return (phone || '').replace(/[^\d]/g, '');
+    if (!phone) return '';
+    let digits = String(phone).replace(/[^\d]/g, '');
+    // Strip leading 00 international dialing prefix (e.g. 00224610... -> 224610...)
+    if (digits.startsWith('00')) {
+      digits = digits.slice(2);
+    }
+    return digits;
   }
 
   // Global Check: Check if a phone number already exists in ANY configured range (One Number = One Range Only)
-  public isNumberInAnyRange(rawPhone: string): { exists: boolean; rangeId?: string; rangeName?: string } {
+  public isNumberInAnyRange(rawPhone: string, excludeRangeId?: string): { exists: boolean; rangeId?: string; rangeName?: string } {
     const digits = this.normalizePhoneDigits(rawPhone);
-    if (!digits) return { exists: false };
+    if (!digits || digits.length < 5) return { exists: false };
 
     const directRangeId = this.phoneToRangeMap.get(digits);
     if (directRangeId && this.ranges.has(directRangeId)) {
-      const foundRange = this.ranges.get(directRangeId)!;
-      return { exists: true, rangeId: directRangeId, rangeName: foundRange.name };
+      if (!excludeRangeId || directRangeId !== excludeRangeId) {
+        const foundRange = this.ranges.get(directRangeId)!;
+        return { exists: true, rangeId: directRangeId, rangeName: foundRange.name };
+      }
     }
 
     // Secondary scan across all ranges to guarantee absolute consistency
     for (const range of this.ranges.values()) {
-      if (range.numbers.includes(digits) || range.numbers.includes('+' + digits)) {
+      if (excludeRangeId && range.id === excludeRangeId) continue;
+      if (
+        range.numbers.includes(digits) || 
+        range.numbers.includes('+' + digits) ||
+        (digits.startsWith('00') && range.numbers.includes(digits.slice(2)))
+      ) {
         this.phoneToRangeMap.set(digits, range.id);
         return { exists: true, rangeId: range.id, rangeName: range.name };
       }
@@ -1192,33 +1231,36 @@ class Store {
     totalChecked: number;
     newCount: number;
     duplicateCount: number;
-    duplicates: { number: string; reason: string; isCurrentRange: boolean }[];
+    duplicates: { number: string; reason: string; isCurrentRange: boolean; rangeName?: string }[];
+    uniqueNumbers: string[];
   } {
     const seenInBatch = new Set<string>();
+    const uniqueNumbers: string[] = [];
     let duplicateCount = 0;
     let newCount = 0;
-    const duplicates: { number: string; reason: string; isCurrentRange: boolean }[] = [];
+    const duplicates: { number: string; reason: string; isCurrentRange: boolean; rangeName?: string }[] = [];
 
     for (const raw of numbers) {
       const digits = this.normalizePhoneDigits(String(raw));
       if (digits.length >= 5) {
         if (seenInBatch.has(digits)) {
           duplicateCount++;
-          if (duplicates.length < 50) {
+          if (duplicates.length < 60) {
             duplicates.push({
               number: digits,
-              reason: 'Duplicate in current input batch',
+              reason: 'Duplicate within input batch',
               isCurrentRange: true,
+              rangeName: 'Input Batch',
             });
           }
           continue;
         }
         seenInBatch.add(digits);
 
-        const check = this.isNumberInAnyRange(digits);
+        const check = this.isNumberInAnyRange(digits, targetRangeId);
         if (check.exists) {
           duplicateCount++;
-          if (duplicates.length < 50) {
+          if (duplicates.length < 60) {
             const isCurrent = Boolean(targetRangeId && check.rangeId === targetRangeId);
             duplicates.push({
               number: digits,
@@ -1226,9 +1268,11 @@ class Store {
                 ? `Already exists in this range ("${check.rangeName}")`
                 : `Already assigned to range "${check.rangeName}"`,
               isCurrentRange: isCurrent,
+              rangeName: check.rangeName,
             });
           }
         } else {
+          uniqueNumbers.push(digits);
           newCount++;
         }
       }
@@ -1239,9 +1283,101 @@ class Store {
       newCount,
       duplicateCount,
       duplicates,
+      uniqueNumbers,
     };
   }
 
+  // Audit and permanently deduplicate all numbers across all ranges in the system.
+  // Enforces 1 Number = 1 Range Only rule across the entire database.
+  public auditAndDeduplicateAllRanges(): {
+    success: boolean;
+    totalRanges: number;
+    totalNumbersBefore: number;
+    totalNumbersAfter: number;
+    duplicatesRemoved: number;
+    rangesModified: { id: string; name: string; prefix: string; beforeCount: number; afterCount: number; removedCount: number }[];
+    sampleDuplicates: { number: string; keptInRange: string; removedFromRange: string }[];
+  } {
+    const seenPhoneMap = new Map<string, { rangeId: string; rangeName: string }>();
+    let totalNumbersBefore = 0;
+    let duplicatesRemoved = 0;
+    const rangesModified: { id: string; name: string; prefix: string; beforeCount: number; afterCount: number; removedCount: number }[] = [];
+    const sampleDuplicates: { number: string; keptInRange: string; removedFromRange: string }[] = [];
+
+    // Sort ranges by createdAt ascending so the earliest range that owned the number keeps it
+    const sortedRanges = Array.from(this.ranges.values()).sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+
+    for (const range of sortedRanges) {
+      const beforeCount = range.numbers.length;
+      totalNumbersBefore += beforeCount;
+      const cleanList: string[] = [];
+      let rangeRemoved = 0;
+
+      for (const rawNum of range.numbers) {
+        const digits = this.normalizePhoneDigits(rawNum);
+        if (!digits || digits.length < 5) {
+          rangeRemoved++;
+          duplicatesRemoved++;
+          continue;
+        }
+
+        const existing = seenPhoneMap.get(digits);
+        if (existing) {
+          // Duplicate found!
+          duplicatesRemoved++;
+          rangeRemoved++;
+          if (sampleDuplicates.length < 50) {
+            sampleDuplicates.push({
+              number: digits,
+              keptInRange: existing.rangeName,
+              removedFromRange: range.name,
+            });
+          }
+          continue;
+        }
+
+        seenPhoneMap.set(digits, { rangeId: range.id, rangeName: range.name });
+        cleanList.push(digits);
+      }
+
+      if (rangeRemoved > 0 || cleanList.length !== beforeCount) {
+        range.numbers = cleanList;
+        range.totalNumbers = cleanList.length;
+        range.updatedAt = Date.now();
+        rangesModified.push({
+          id: range.id,
+          name: range.name,
+          prefix: range.prefix,
+          beforeCount,
+          afterCount: cleanList.length,
+          removedCount: rangeRemoved,
+        });
+      }
+    }
+
+    // Rebuild global phoneToRangeMap
+    this.phoneToRangeMap.clear();
+    for (const [phone, info] of seenPhoneMap.entries()) {
+      this.phoneToRangeMap.set(phone, info.rangeId);
+    }
+
+    const totalNumbersAfter = seenPhoneMap.size;
+    if (duplicatesRemoved > 0) {
+      this.scheduleSave();
+    }
+
+    return {
+      success: true,
+      totalRanges: this.ranges.size,
+      totalNumbersBefore,
+      totalNumbersAfter,
+      duplicatesRemoved,
+      rangesModified,
+      sampleDuplicates,
+    };
+  }
+
+  // Automatic Range Detection based on configured bulk numbers & intelligent phone matching (like SMS)
   public findRangeForPhone(phone: string, country?: string): NumberRange | null {
     const digits = this.normalizePhoneDigits(phone);
     if (!digits) return null;
@@ -1254,13 +1390,56 @@ class Store {
 
     // 2. Direct check in range number arrays (supporting with/without + or leading zeroes)
     for (const range of this.ranges.values()) {
-      if (range.numbers.includes(digits) || range.numbers.includes('+' + digits)) {
+      if (
+        range.numbers.includes(digits) || 
+        range.numbers.includes('+' + digits) ||
+        (digits.startsWith('00') && range.numbers.includes(digits.slice(2)))
+      ) {
         this.phoneToRangeMap.set(digits, range.id);
         return range;
       }
     }
 
-    // 3. Prefix matching (e.g. Guinea 224, Tanzania 255, Ukraine 380)
+    // 3. National format to International format matching:
+    // If incoming phone starts with 0 (e.g. 0610351009) or doesn't have country prefix,
+    // test prefix + number against ranges!
+    for (const range of this.ranges.values()) {
+      const cleanPrefix = range.prefix.replace(/[^\d]/g, '');
+      if (cleanPrefix) {
+        // e.g. national 0610... -> prefix 224 + 610...
+        if (digits.startsWith('0') && digits.length >= 8) {
+          const intlCandidate = cleanPrefix + digits.slice(1);
+          if (range.numbers.includes(intlCandidate) || this.phoneToRangeMap.get(intlCandidate) === range.id) {
+            return range;
+          }
+        }
+        // e.g. local 610... -> prefix 224 + 610...
+        const intlCandidate2 = cleanPrefix + digits;
+        if (range.numbers.includes(intlCandidate2) || this.phoneToRangeMap.get(intlCandidate2) === range.id) {
+          return range;
+        }
+        // Vice versa: range number saved as local, incoming SMS has full intl prefix
+        if (digits.startsWith(cleanPrefix)) {
+          const localPart = digits.slice(cleanPrefix.length);
+          if (localPart && (range.numbers.includes(localPart) || range.numbers.includes('0' + localPart))) {
+            return range;
+          }
+        }
+      }
+    }
+
+    // 4. Suffix matching (last 8-9 digits) for telecom numbers
+    if (digits.length >= 8) {
+      const suffix8 = digits.slice(-8);
+      for (const range of this.ranges.values()) {
+        const found = range.numbers.find(n => n.endsWith(suffix8));
+        if (found) {
+          return range;
+        }
+      }
+    }
+
+    // 5. Prefix matching (e.g. Guinea 224, Tanzania 255, Ukraine 380)
     // Longest prefix match takes precedence
     const matchingByPrefix: NumberRange[] = [];
     for (const range of this.ranges.values()) {
@@ -1283,7 +1462,7 @@ class Store {
       return matchingByPrefix[0];
     }
 
-    // 4. Country Note match fallback
+    // 6. Country Note match fallback
     if (country) {
       const cLower = country.toLowerCase();
       for (const range of this.ranges.values()) {
@@ -1688,6 +1867,9 @@ class Store {
     // Register fingerprint permanently
     this.seenFingerprints.set(fingerprint, Date.now());
 
+    // Increment cumulative persistent total (never resets when logs clear)
+    this.cumulativeTotalSms++;
+
     // Prune seenFingerprints if exceeding 50,000 entries (keep most recent 40,000)
     if (this.seenFingerprints.size > 50000) {
       const entries = Array.from(this.seenFingerprints.entries()).sort((a, b) => a[1] - b[1]);
@@ -1869,8 +2051,21 @@ class Store {
   public getMessages(role: UserRole, allowedServices?: string[], query?: string, limit?: number, part?: string | number): SmsMessage[] {
     let list = this.messages;
 
-    // If client role, strictly hide any message that is blocked by admin client filters
+    // If client role:
+    // 1. Strictly hide any message that is blocked by admin client filters
+    // 2. Hide messages prior to clientClearedAt (so client history can be cleared while admin keeps archive)
+    // 3. Obey clientMaxRetention limit (FIFO: new come in at top, old past limit drop off)
     if (role === 'client') {
+      const pStr = part !== undefined && part !== null && String(part).trim() !== '' && String(part).toLowerCase() !== 'all'
+        ? String(part).toLowerCase().trim()
+        : '';
+      const clearedTimestamp = Math.max(
+        this.clientClearedAt || 0,
+        pStr ? (this.clientClearedPart.get(pStr) || 0) : 0
+      );
+      if (clearedTimestamp > 0) {
+        list = list.filter(m => m.timestamp > clearedTimestamp);
+      }
       list = list.filter(m => !this.isMessageBlockedForClients(m));
     }
 
@@ -1928,11 +2123,39 @@ class Store {
       );
     }
 
-    const effectiveLimit = limit && limit > 0 ? limit : (this.settings.maxSmsRetention || 2000);
+    // Capacity buffer calculation:
+    // If client role: bounded by clientMaxRetention (FIFO rolling window)
+    let effectiveLimit: number;
+    if (role === 'client') {
+      const clientCap = this.settings.clientMaxRetention || 1000;
+      effectiveLimit = limit && limit > 0 ? Math.min(limit, clientCap) : clientCap;
+    } else {
+      // Admin role: sees full buffer
+      effectiveLimit = limit && limit > 0 ? limit : (this.settings.maxSmsRetention || 20000);
+    }
+
     return list.slice(0, effectiveLimit);
   }
 
-  public clearMessages(part?: string | number): boolean {
+  // Clear client history specifically (Admin keeps all messages)
+  public clearClientMessages(part?: string | number): boolean {
+    const now = Date.now();
+    if (part !== undefined && part !== null && String(part).trim() !== '' && String(part).toLowerCase() !== 'all') {
+      const pStr = String(part).toLowerCase().trim();
+      this.clientClearedPart.set(pStr, now);
+    } else {
+      this.clientClearedAt = now;
+      this.clientClearedPart.clear();
+    }
+    this.scheduleSave();
+    return true;
+  }
+
+  public clearMessages(part?: string | number, target: 'all' | 'client' | 'admin' = 'all'): boolean {
+    if (target === 'client') {
+      return this.clearClientMessages(part);
+    }
+
     if (part !== undefined && part !== null && String(part).trim() !== '' && String(part).toLowerCase() !== 'all') {
       const pStr = String(part).toLowerCase().trim();
       const targetPartition = this.partitions.get(pStr) || 
@@ -2010,6 +2233,9 @@ class Store {
       if (this.messages.length > this.settings.maxSmsRetention) {
         this.messages.length = this.settings.maxSmsRetention;
       }
+    }
+    if (newSettings.clientMaxRetention && newSettings.clientMaxRetention > 0) {
+      this.settings.clientMaxRetention = Math.max(10, Math.min(50000, newSettings.clientMaxRetention));
     }
     this.scheduleSave();
     return this.getSettings();
@@ -2091,13 +2317,256 @@ class Store {
     return { success: true };
   }
 
+  // --- SMS Reports & Manual Queries with Grouping ---
+  public getSmsReports(params: {
+    role: 'admin' | 'client';
+    allowedServices?: string[];
+    from?: number;
+    to?: number;
+    range?: string;
+    number?: string;
+    cli?: string;
+    clientId?: string;
+    part?: string | number;
+    groupBy?: string[];
+    query?: string;
+    limit?: number;
+  }): {
+    messages: SmsMessage[];
+    groups?: { [key: string]: any; count: number }[];
+    totalCount: number;
+    filteredCount: number;
+  } {
+    let list = this.messages;
+
+    // Filter blocked CLIs / messages for clients
+    if (params.role === 'client') {
+      list = list.filter(m => !this.isMessageBlockedForClients(m));
+      if (params.allowedServices && !params.allowedServices.includes('*')) {
+        const allowedLower = params.allowedServices.map(s => s.toLowerCase());
+        list = list.filter(m => 
+          allowedLower.includes(m.service.toLowerCase()) || 
+          allowedLower.includes(m.sender.toLowerCase()) ||
+          (m.cli && allowedLower.includes(m.cli.toLowerCase()))
+        );
+      }
+    }
+
+    // Partition filter
+    if (params.part !== undefined && params.part !== null && String(params.part).trim() !== '' && String(params.part).toLowerCase() !== 'all') {
+      const pStr = String(params.part).toLowerCase().trim();
+      const targetPartition = this.partitions.get(pStr) || 
+        Array.from(this.partitions.values()).find(p => p.id.toLowerCase() === pStr || p.name.toLowerCase() === pStr);
+
+      list = list.filter(m => {
+        const mPartId = String(m.partId || '').toLowerCase();
+        const mPart = String(m.part || '').toLowerCase();
+        const mPartName = String(m.partName || '').toLowerCase();
+
+        if (targetPartition) {
+          if (mPartId === targetPartition.id.toLowerCase()) return true;
+          if (mPartName === targetPartition.name.toLowerCase()) return true;
+          if ((targetPartition.id === '1' || targetPartition.id === 'part_1') && (mPart === '1' || mPartId === 'part_1' || mPartId === '1')) return true;
+          if ((targetPartition.id === '2' || targetPartition.id === 'part_2') && (mPart === '2' || mPartId === 'part_2' || mPartId === '2')) return true;
+        }
+
+        if (pStr === '1' || pStr === 'part_1') {
+          return mPartId === 'part_1' || mPartId === '1' || mPart === '1' || mPartName.includes('part 1');
+        }
+        if (pStr === '2' || pStr === 'part_2') {
+          return mPartId === 'part_2' || mPartId === '2' || mPart === '2' || mPartName.includes('part 2');
+        }
+
+        return mPartId === pStr || mPart === pStr || mPartName === pStr;
+      });
+    }
+
+    // Client filter (Admin selecting specific Client)
+    if (params.clientId && params.clientId !== 'All' && params.clientId !== 'all') {
+      const targetClient = this.clients.get(params.clientId);
+      if (targetClient) {
+        if (targetClient.allowedServices && targetClient.allowedServices.length > 0 && !targetClient.allowedServices.includes('*')) {
+          const allowedLower = targetClient.allowedServices.map(s => s.toLowerCase());
+          list = list.filter(m => 
+            allowedLower.includes(m.service.toLowerCase()) || 
+            allowedLower.includes(m.sender.toLowerCase()) ||
+            (m.cli && allowedLower.includes(m.cli.toLowerCase()))
+          );
+        }
+      }
+    }
+
+    // Date range filter
+    if (params.from !== undefined && !isNaN(params.from)) {
+      list = list.filter(m => (m.timestamp || 0) >= params.from!);
+    }
+    if (params.to !== undefined && !isNaN(params.to)) {
+      list = list.filter(m => (m.timestamp || 0) <= params.to!);
+    }
+
+    // Range Name filter
+    if (params.range && params.range.trim() !== '' && params.range.toLowerCase() !== 'all') {
+      const target = params.range.toLowerCase().trim();
+      list = list.filter(m => {
+        const resolved = (m.rangeName || this.findRangeForPhone(m.phone, m.country)?.name || m.country || '').toLowerCase();
+        return resolved === target || resolved.includes(target);
+      });
+    }
+
+    // Number contains filter
+    if (params.number && params.number.trim() !== '') {
+      const cleanTarget = params.number.replace(/[^\d]/g, '');
+      if (cleanTarget) {
+        list = list.filter(m => (m.phone || '').replace(/[^\d]/g, '').includes(cleanTarget));
+      }
+    }
+
+    // CLI contains filter
+    if (params.cli && params.cli.trim() !== '') {
+      const cleanCli = params.cli.toLowerCase().trim();
+      list = list.filter(m => {
+        const cliStr = (m.cli || m.service || m.sender || '').toLowerCase();
+        return cliStr.includes(cleanCli);
+      });
+    }
+
+    // In-table search filter
+    if (params.query && params.query.trim() !== '') {
+      const q = params.query.toLowerCase().trim();
+      list = list.filter(m => {
+        const rangeStr = (m.rangeName || this.findRangeForPhone(m.phone, m.country)?.name || m.country || '').toLowerCase();
+        return (
+          (m.phone || '').includes(q) ||
+          (m.cli || m.service || m.sender || '').toLowerCase().includes(q) ||
+          (m.message || '').toLowerCase().includes(q) ||
+          rangeStr.includes(q) ||
+          (m.otp && m.otp.toLowerCase().includes(q))
+        );
+      });
+    }
+
+    const filteredCount = list.length;
+
+    // Check if grouping is requested
+    const validGroupFields = ['hour', 'date', 'month', 'range', 'client', 'number', 'cli'];
+    const activeGroups = (params.groupBy || [])
+      .map(g => g.toLowerCase().trim())
+      .filter(g => validGroupFields.includes(g));
+
+    if (activeGroups.length > 0) {
+      const groupMap = new Map<string, { [key: string]: any; count: number }>();
+
+      for (const m of list) {
+        // Calculate date/time values in Pakistan Standard Time (PKT = UTC+5)
+        const pktDate = new Date((m.timestamp || Date.now()) + 5 * 60 * 60 * 1000);
+        const yyyy = pktDate.getUTCFullYear();
+        const mm = String(pktDate.getUTCMonth() + 1).padStart(2, '0');
+        const dd = String(pktDate.getUTCDate()).padStart(2, '0');
+        const hh = String(pktDate.getUTCHours()).padStart(2, '0');
+
+        const resolvedRange = m.rangeName || this.findRangeForPhone(m.phone, m.country)?.name || m.country || 'Direct';
+        const cliName = (m.cli || m.service || m.sender || 'Direct').trim();
+
+        const itemValues: Record<string, string> = {
+          hour: `${yyyy}-${mm}-${dd} ${hh}:00`,
+          date: `${yyyy}-${mm}-${dd}`,
+          month: `${yyyy}-${mm}`,
+          range: resolvedRange,
+          client: (m as any).clientName || (m as any).clientUsername || 'All',
+          number: m.phone || 'N/A',
+          cli: cliName,
+        };
+
+        const compositeKey = activeGroups.map(field => `${field}:${itemValues[field] || ''}`).join('|||');
+
+        if (!groupMap.has(compositeKey)) {
+          const entry: any = { count: 0 };
+          for (const field of activeGroups) {
+            entry[field] = itemValues[field];
+          }
+          groupMap.set(compositeKey, entry);
+        }
+
+        groupMap.get(compositeKey)!.count += 1;
+      }
+
+      // Sort groups by count descending, then key
+      const groups = Array.from(groupMap.values()).sort((a, b) => b.count - a.count);
+
+      return {
+        messages: [],
+        groups,
+        totalCount: this.messages.length,
+        filteredCount,
+      };
+    }
+
+    // Normal mode: attach resolved rangeName to each message
+    const resolvedMessages = list.slice(0, params.limit || 5000).map(m => ({
+      ...m,
+      rangeName: m.rangeName || this.findRangeForPhone(m.phone, m.country)?.name || m.country || 'Direct',
+    }));
+
+    return {
+      messages: resolvedMessages,
+      totalCount: this.messages.length,
+      filteredCount,
+    };
+  }
+
   public getStats(): SystemStats {
     const now = Date.now();
     const todayStart = new Date();
     todayStart.setHours(0, 0, 0, 0);
     const todayMs = todayStart.getTime();
 
-    const todaySms = this.messages.filter(m => m.timestamp >= todayMs).length;
+    const yesterdayStart = new Date(todayStart);
+    yesterdayStart.setDate(yesterdayStart.getDate() - 1);
+    const yesterdayMs = yesterdayStart.getTime();
+
+    const weekStartMs = now - 7 * 86400000;
+
+    const monthStart = new Date();
+    monthStart.setDate(1);
+    monthStart.setHours(0, 0, 0, 0);
+    const monthStartMs = monthStart.getTime();
+
+    let todaySms = 0;
+    let yesterdaySms = 0;
+    let thisWeekSms = 0;
+    let thisMonthSms = 0;
+
+    for (const m of this.messages) {
+      const ts = m.timestamp || 0;
+      if (ts >= todayMs) {
+        todaySms++;
+      } else if (ts >= yesterdayMs && ts < todayMs) {
+        yesterdaySms++;
+      }
+      if (ts >= weekStartMs) {
+        thisWeekSms++;
+      }
+      if (ts >= monthStartMs) {
+        thisMonthSms++;
+      }
+    }
+
+    // Daily stats for last 7 days for the dashboard chart
+    const dailyStats: { date: string; count: number; label: string }[] = [];
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date(todayStart);
+      d.setDate(d.getDate() - i);
+      const dayStart = d.getTime();
+      const dayEnd = dayStart + 86400000;
+      const count = this.messages.filter(m => (m.timestamp || 0) >= dayStart && (m.timestamp || 0) < dayEnd).length;
+      const label = d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+      dailyStats.push({
+        date: d.toISOString().split('T')[0],
+        count,
+        label,
+      });
+    }
+
     const recentOtpCount = this.messages.filter(m => !!m.otp && m.timestamp >= (now - 3600000 * 2)).length;
 
     // Service frequency counts
@@ -2121,8 +2590,12 @@ class Store {
     }
 
     return {
-      totalSms: this.messages.length,
+      totalSms: Math.max(this.cumulativeTotalSms, this.messages.length),
       todaySms,
+      yesterdaySms,
+      thisWeekSms,
+      thisMonthSms,
+      dailyStats,
       activeClients,
       activeProviders: this.apiProviders.size,
       activeSessions,

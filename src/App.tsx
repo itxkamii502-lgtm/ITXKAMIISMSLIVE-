@@ -3,7 +3,7 @@ import { AuthProvider, useAuth } from './context/AuthContext';
 import { ThemeProvider } from './context/ThemeContext';
 import { LoginScreen } from './components/LoginScreen';
 import { AdminLayout } from './components/admin/AdminLayout';
-import { ClientLiveSMS } from './components/client/ClientLiveSMS';
+import { ClientPortalLayout } from './components/client/ClientPortalLayout';
 import { Radio } from 'lucide-react';
 
 function LoadingFallback() {
@@ -25,6 +25,15 @@ function LoadingFallback() {
 function AppContent() {
   const { session, isLoading } = useAuth();
 
+  // Sync login URL when unauthenticated
+  React.useEffect(() => {
+    if (!isLoading && !session) {
+      if (window.location.pathname !== '/login' && window.location.pathname !== '/') {
+        window.history.replaceState(null, '', '/login');
+      }
+    }
+  }, [session, isLoading]);
+
   if (isLoading) {
     return <LoadingFallback />;
   }
@@ -34,13 +43,13 @@ function AppContent() {
     return <LoginScreen />;
   }
 
-  // Admin Role -> Full Admin Panel (Dashboard, API Providers, Clients, Live SMS, Settings, Logout)
+  // Admin Role -> Full Admin Panel (SMS Reports, Live SMS Relay, Dashboard, API Providers, Clients, Settings, Logout)
   if (session.role === 'admin') {
     return <AdminLayout />;
   }
 
-  // Client Role -> Isolated Live SMS Screen ONLY with 5-min session timer
-  return <ClientLiveSMS />;
+  // Client / Member Role -> Allowed SMS Reports Portal ONLY (Live Access is restricted to Admin)
+  return <ClientPortalLayout />;
 }
 
 export default function App() {

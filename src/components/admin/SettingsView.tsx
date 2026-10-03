@@ -517,13 +517,10 @@ pm2 save
           </div>
 
           <div className="space-y-4 max-w-xl text-xs">
-            {/* Urdu & English Guidance */}
+            {/* Guidance */}
             <div className="p-3.5 bg-slate-950 border border-slate-800 rounded-xl space-y-1.5">
               <p className="text-slate-300 font-medium">
-                Admin can set any number of SMS to retain in the gateway feed. Previously, default was capped at 500. Now you can increase this up to <strong className="text-emerald-400">50,000 SMS</strong>.
-              </p>
-              <p className="text-slate-400 font-urdu text-[13px] leading-relaxed" dir="rtl">
-                ایڈمن اپنی مرضی سے جتنے ایس ایم ایس لائیو فیڈ میں محفوظ رکھنا چاہتا ہے یہاں سیٹ کر سکتا ہے (جیسے 1000، 2000، 5000، 10,000 یا زیادہ)۔
+                Admin can configure the number of SMS messages retained in the live gateway feed buffer up to <strong className="text-emerald-400">50,000 SMS</strong>.
               </p>
             </div>
 

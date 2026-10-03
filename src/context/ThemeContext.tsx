@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import { getPakistanAutoTheme } from '../utils/pakistanTime';
 
 export type ThemeMode = 'dark' | 'light';
 
@@ -12,20 +13,8 @@ interface ThemeContextType {
 
 const ThemeContext = createContext<ThemeContextType | undefined>(undefined);
 
-const THEME_STORAGE_KEY = 'kbmax_theme_mode';
-
 export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [themeMode, setThemeModeState] = useState<ThemeMode>(() => {
-    try {
-      const saved = localStorage.getItem(THEME_STORAGE_KEY);
-      if (saved === 'light' || saved === 'dark') {
-        return saved;
-      }
-    } catch {
-      // Ignore
-    }
-    return 'dark';
-  });
+  const [themeMode, setThemeModeState] = useState<ThemeMode>(() => getPakistanAutoTheme());
 
   const applyTheme = useCallback((mode: ThemeMode) => {
     const root = document.documentElement;
@@ -38,22 +27,32 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
   }, []);
 
+  // Sync automatic theme based on Pakistan Standard Time (06:00 to 19:00 = day/light, 19:00 to 06:00 = black/dark)
   useEffect(() => {
-    applyTheme(themeMode);
-    try {
-      localStorage.setItem(THEME_STORAGE_KEY, themeMode);
-    } catch {
-      // Ignore
-    }
-  }, [themeMode, applyTheme]);
+    const syncPktTheme = () => {
+      const pktMode = getPakistanAutoTheme();
+      setThemeModeState(pktMode);
+      applyTheme(pktMode);
+    };
+
+    syncPktTheme();
+    // Re-check every 30 seconds
+    const interval = setInterval(syncPktTheme, 30000);
+    return () => clearInterval(interval);
+  }, [applyTheme]);
 
   const setThemeMode = useCallback((mode: ThemeMode) => {
     setThemeModeState(mode);
-  }, []);
+    applyTheme(mode);
+  }, [applyTheme]);
 
   const toggleThemeMode = useCallback(() => {
-    setThemeModeState((prev) => (prev === 'dark' ? 'light' : 'dark'));
-  }, []);
+    setThemeModeState((prev) => {
+      const next = prev === 'dark' ? 'light' : 'dark';
+      applyTheme(next);
+      return next;
+    });
+  }, [applyTheme]);
 
   const isDark = themeMode === 'dark';
   const isLight = themeMode === 'light';

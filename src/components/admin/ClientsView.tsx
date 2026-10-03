@@ -645,7 +645,7 @@ export const ClientsView: React.FC = () => {
                   />
                 </div>
                 <p className="text-[10px] text-amber-400/90 mt-1">
-                  🔒 Ek time mn sirf 3 users hi panel access kr skte hain. Agr 4th user access krne ki koshish kre ga to yeh client ID 15 minute k lye mukammal lock ho jaye gi (kisi k pas open nahi hogi).
+                  Enforces maximum concurrent sessions. If additional users attempt concurrent access, the client ID triggers a 15-minute security lockout.
                 </p>
               </div>
 

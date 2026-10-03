@@ -355,6 +355,18 @@ store.onNewMessage((msg) => {
   broadcastNewMessage(msg);
 });
 
+function broadcastClearEvent(target: 'client' | 'admin' | 'all', part?: string) {
+  const eventPayload = JSON.stringify({ target, part: part || 'all', timestamp: Date.now() });
+  for (const client of sseClients) {
+    try {
+      if (target === 'client' && client.role !== 'client') continue;
+      client.res.write(`event: clear_logs\ndata: ${eventPayload}\n\n`);
+    } catch {
+      sseClients.delete(client);
+    }
+  }
+}
+
 // SSE Live Stream Endpoint
 app.get('/api/sms/stream', requireAuth, (req: AuthRequest, res: Response) => {
   res.setHeader('Content-Type', 'text/event-stream');
@@ -408,6 +420,72 @@ app.get('/api/sms', requireAuth, (req: AuthRequest, res: Response) => {
     timestamp: Date.now(),
   });
 });
+
+// Dedicated SMS Reports Endpoint (Supporting date ranges, range filters, number/CLI search, and group by)
+const handleSmsReports = (req: AuthRequest, res: Response) => {
+  const role = req.session!.role;
+  const allowedServices = req.session!.allowedServices;
+
+  const rawFrom = req.query.from || req.body?.from;
+  const rawTo = req.query.to || req.body?.to;
+  const range = (req.query.range || req.body?.range) as string | undefined;
+  const number = (req.query.number || req.body?.number) as string | undefined;
+  const cli = (req.query.cli || req.body?.cli) as string | undefined;
+  const clientId = (req.query.clientId || req.body?.clientId) as string | undefined;
+  const rawGroupBy = req.query.groupBy || req.body?.groupBy;
+  const query = (req.query.q || req.body?.q) as string | undefined;
+  const part = (req.query.part || req.body?.part) as string | undefined;
+  const limit = req.query.limit || req.body?.limit ? parseInt(String(req.query.limit || req.body?.limit)) : 10000;
+
+  let fromTs: number | undefined;
+  if (rawFrom) {
+    if (typeof rawFrom === 'number') fromTs = rawFrom;
+    else {
+      const parsed = new Date(String(rawFrom)).getTime();
+      if (!isNaN(parsed)) fromTs = parsed;
+    }
+  }
+
+  let toTs: number | undefined;
+  if (rawTo) {
+    if (typeof rawTo === 'number') toTs = rawTo;
+    else {
+      const parsed = new Date(String(rawTo)).getTime();
+      if (!isNaN(parsed)) toTs = parsed;
+    }
+  }
+
+  let groupByArr: string[] | undefined;
+  if (Array.isArray(rawGroupBy)) {
+    groupByArr = rawGroupBy.map(String);
+  } else if (typeof rawGroupBy === 'string' && rawGroupBy.trim()) {
+    groupByArr = rawGroupBy.split(',').map(s => s.trim()).filter(Boolean);
+  }
+
+  const report = store.getSmsReports({
+    role,
+    allowedServices,
+    from: fromTs,
+    to: toTs,
+    range,
+    number,
+    cli,
+    clientId,
+    part,
+    groupBy: groupByArr,
+    query,
+    limit,
+  });
+
+  res.json({
+    success: true,
+    ...report,
+    timestamp: Date.now(),
+  });
+};
+
+app.get('/api/sms/reports', requireAuth, handleSmsReports);
+app.post('/api/sms/reports', requireAuth, handleSmsReports);
 
 // Client Filter Rules Endpoints (Hide specific CLIs or SMS body from client panel)
 app.get('/api/client-filters', requireAdmin, (_req: AuthRequest, res: Response) => {
@@ -469,9 +547,34 @@ app.delete('/api/partitions/:id', requireAdmin, (req: AuthRequest, res: Response
 
 // Admin endpoints to manage SMS
 app.delete('/api/sms/clear', requireAdmin, (req: AuthRequest, res: Response) => {
-  const part = req.query.part as string | undefined;
-  store.clearMessages(part);
-  res.json({ success: true, message: part ? `Messages in partition cleared` : 'All SMS messages cleared' });
+  const part = (req.query.part || req.body?.part) as string | undefined;
+  const target = ((req.query.target || req.body?.target) as 'client' | 'admin' | 'all') || 'all';
+
+  if (target === 'client') {
+    store.clearClientMessages(part);
+    broadcastClearEvent('client', part);
+    return res.json({ 
+      success: true, 
+      target: 'client',
+      message: part ? `Client logs in partition cleared (Admin history preserved)` : 'Client logs cleared (Admin history preserved)' 
+    });
+  }
+
+  store.clearMessages(part, target);
+  broadcastClearEvent('all', part);
+  res.json({ 
+    success: true, 
+    target,
+    message: part ? `Messages in partition cleared` : 'All SMS messages cleared' 
+  });
+});
+
+// Client self-clear endpoint (only clears client's own portal view, admin records are 100% saved)
+app.delete('/api/client/sms/clear', requireAuth, (req: AuthRequest, res: Response) => {
+  const part = (req.query.part || req.body?.part) as string | undefined;
+  store.clearClientMessages(part);
+  broadcastClearEvent('client', part);
+  res.json({ success: true, message: 'Client logs cleared' });
 });
 
 app.delete('/api/sms/:id', requireAdmin, (req: AuthRequest, res: Response) => {
@@ -652,10 +755,22 @@ app.get('/api/ranges', requireAuth, (_req: AuthRequest, res: Response) => {
 app.post('/api/ranges/check-duplicates', requireAdmin, (req: AuthRequest, res: Response) => {
   const { numbers, targetRangeId } = req.body || {};
   if (!Array.isArray(numbers) || numbers.length === 0) {
-    return res.json({ totalChecked: 0, newCount: 0, duplicateCount: 0, duplicates: [] });
+    return res.json({ totalChecked: 0, newCount: 0, duplicateCount: 0, duplicates: [], uniqueNumbers: [] });
   }
   const result = store.checkDuplicateNumbers(numbers, targetRangeId ? String(targetRangeId) : undefined);
   res.json(result);
+});
+
+// Admin-only: Audit and clean all duplicates across ALL configured ranges (1 Number = 1 Range Only)
+app.post('/api/ranges/deduplicate-all', requireAdmin, (_req: AuthRequest, res: Response) => {
+  const result = store.auditAndDeduplicateAllRanges();
+  res.json({
+    success: true,
+    ...result,
+    message: result.duplicatesRemoved > 0
+      ? `Audit complete! Removed ${result.duplicatesRemoved.toLocaleString()} duplicate number(s) across ${result.rangesModified.length} range(s). All numbers are now 100% unique.`
+      : `Audit complete! No duplicate numbers found across ${result.totalRanges} configured range(s). All ${result.totalNumbersAfter.toLocaleString()} numbers are 100% unique.`,
+  });
 });
 
 // Admin-only endpoints for managing ranges and bulk numbers

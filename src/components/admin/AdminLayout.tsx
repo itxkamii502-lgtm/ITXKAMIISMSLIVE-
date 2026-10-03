@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   LayoutDashboard, 
   Server, 
@@ -14,11 +14,11 @@ import {
   PanelLeftOpen,
   ChevronLeft,
   ChevronRight,
-  UploadCloud
+  UploadCloud,
+  FileSpreadsheet
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { BrandLogo } from '../common/BrandLogo';
-import { ThemeToggle } from '../common/ThemeToggle';
 import { DashboardView } from './DashboardView';
 import { ApiProvidersView } from './ApiProvidersView';
 import { ClientsView } from './ClientsView';
@@ -26,17 +26,82 @@ import { LiveSMSView } from './LiveSMSView';
 import { SettingsView } from './SettingsView';
 import { ClientFilterView } from './ClientFilterView';
 import { BulkNumbersView } from './BulkNumbersView';
+import { SMSReportsView } from '../reports/SMSReportsView';
 import { THEMES } from '../../utils/theme';
+
+type AdminTab = 'dashboard' | 'providers' | 'clients' | 'sms' | 'sms-reports' | 'client-filters' | 'settings' | 'bulk-numbers';
+
+const TAB_TO_PATH: Record<AdminTab, string> = {
+  'sms-reports': '/admin/sms-reports',
+  'sms': '/admin/sms',
+  'client-filters': '/admin/client-filters',
+  'dashboard': '/admin/dashboard',
+  'providers': '/admin/providers',
+  'clients': '/admin/clients',
+  'settings': '/admin/settings',
+  'bulk-numbers': '/admin/bulk-numbers',
+};
+
+const PATH_TO_TAB: Record<string, AdminTab> = {
+  '/admin': 'sms-reports',
+  '/admin/': 'sms-reports',
+  '/admin/sms-reports': 'sms-reports',
+  '/admin/reports': 'sms-reports',
+  '/admin/sms': 'sms',
+  '/admin/live-sms': 'sms',
+  '/admin/client-filters': 'client-filters',
+  '/admin/dashboard': 'dashboard',
+  '/admin/providers': 'providers',
+  '/admin/clients': 'clients',
+  '/admin/settings': 'settings',
+  '/admin/bulk-numbers': 'bulk-numbers',
+};
 
 export const AdminLayout: React.FC = () => {
   const { session, logout, settings } = useAuth();
   const theme = settings?.theme ? THEMES[settings.theme] : THEMES.emerald;
 
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'providers' | 'clients' | 'sms' | 'client-filters' | 'settings' | 'bulk-numbers'>('sms');
+  // Sync active tab with browser URL
+  const [activeTab, setActiveTabState] = useState<AdminTab>(() => {
+    const currentPath = window.location.pathname;
+    if (PATH_TO_TAB[currentPath]) {
+      return PATH_TO_TAB[currentPath];
+    }
+    return 'sms-reports';
+  });
+
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
+  const navigateToTab = (tab: AdminTab) => {
+    setActiveTabState(tab);
+    const targetPath = TAB_TO_PATH[tab] || '/admin/sms-reports';
+    if (window.location.pathname !== targetPath) {
+      window.history.pushState(null, '', targetPath);
+    }
+  };
+
+  // Listen to browser Back/Forward navigation
+  useEffect(() => {
+    const handlePopState = () => {
+      const path = window.location.pathname;
+      if (PATH_TO_TAB[path]) {
+        setActiveTabState(PATH_TO_TAB[path]);
+      }
+    };
+    window.addEventListener('popstate', handlePopState);
+    
+    // Ensure initial URL matches active tab
+    const initialPath = TAB_TO_PATH[activeTab] || '/admin/sms-reports';
+    if (!PATH_TO_TAB[window.location.pathname]) {
+      window.history.replaceState(null, '', initialPath);
+    }
+
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, [activeTab]);
+
   const navItems = [
+    { id: 'sms-reports', label: 'SMS Reports', icon: FileSpreadsheet },
     { id: 'sms', label: 'Live SMS Relay', icon: Radio },
     { id: 'client-filters', label: 'Clients CLI Filter', icon: ShieldAlert },
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
@@ -64,8 +129,6 @@ export const AdminLayout: React.FC = () => {
         </div>
 
         <div className="flex items-center gap-2">
-          <ThemeToggle size="sm" />
-
           <button
             type="button"
             onClick={() => logout('Admin logged out safely.')}
@@ -156,7 +219,7 @@ export const AdminLayout: React.FC = () => {
                   id={`admin-nav-${item.id}`}
                   type="button"
                   onClick={() => {
-                    setActiveTab(item.id);
+                    navigateToTab(item.id);
                     setMobileMenuOpen(false);
                   }}
                   title={item.label}
@@ -193,14 +256,8 @@ export const AdminLayout: React.FC = () => {
                   <span className="text-[10px] text-emerald-400 font-mono">Admin Role</span>
                 </div>
               </div>
-
-              <ThemeToggle size="sm" />
             </div>
-          ) : (
-            <div className="flex justify-center">
-              <ThemeToggle size="sm" />
-            </div>
-          )}
+          ) : null}
 
           {/* Logout Button */}
           <button
@@ -220,25 +277,9 @@ export const AdminLayout: React.FC = () => {
 
       {/* Main Content Area */}
       <div className="flex-1 flex flex-col min-w-0">
-        {/* Desktop Quick Header Toolbar when sidebar is collapsed */}
-        {sidebarCollapsed && (
-          <div className="hidden md:flex items-center justify-between px-6 py-2 bg-slate-900/60 border-b border-slate-800/80">
-            <button
-              type="button"
-              onClick={() => setSidebarCollapsed(false)}
-              className="inline-flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-800/80 hover:bg-slate-700 border border-slate-700 text-slate-300 hover:text-white text-xs font-semibold cursor-pointer"
-            >
-              <PanelLeftOpen className="w-4 h-4 text-emerald-400" />
-              <span>Show Sidebar</span>
-            </button>
-            <div className="text-xs font-mono text-slate-400">
-              KB MAX Live Gateway Console
-            </div>
-          </div>
-        )}
-
         <main className="flex-1 p-2 sm:p-4 lg:p-6 max-w-7xl w-full mx-auto">
-          {activeTab === 'dashboard' && <DashboardView onNavigate={(t) => setActiveTab(t as any)} />}
+          {activeTab === 'sms-reports' && <SMSReportsView />}
+          {activeTab === 'dashboard' && <DashboardView onNavigate={(t) => navigateToTab(t as any)} />}
           {activeTab === 'providers' && <ApiProvidersView />}
           {activeTab === 'clients' && <ClientsView />}
           {activeTab === 'sms' && <LiveSMSView />}

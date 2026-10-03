@@ -25,7 +25,8 @@ import {
   Filter,
   MessageSquare,
   KeyRound,
-  Hash
+  Hash,
+  Trash2
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { BrandLogo } from '../common/BrandLogo';
@@ -193,6 +194,18 @@ export const ClientLiveSMS: React.FC = () => {
           // Ignore
         }
       });
+
+      eventSource.addEventListener('clear_logs', (event) => {
+        try {
+          const clearData = JSON.parse(event.data);
+          if (clearData.target === 'client' || clearData.target === 'all') {
+            setMessages([]);
+            setCurrentPage(1);
+          }
+        } catch {
+          // Ignore
+        }
+      });
     } catch {
       // Fallback to 1-second polling
     }
@@ -215,6 +228,21 @@ export const ClientLiveSMS: React.FC = () => {
       window.removeEventListener('online', handleVisibility);
     };
   }, [fetchLiveMessages, selectedPart, session]);
+
+  const handleClientClearLogs = async () => {
+    if (!session) return;
+    try {
+      setMessages([]);
+      setCurrentPage(1);
+      const url = selectedPart ? `/api/client/sms/clear?part=${encodeURIComponent(selectedPart)}` : '/api/client/sms/clear';
+      await fetch(url, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${session.token}` },
+      });
+    } catch {
+      // Ignore
+    }
+  };
 
   const handleCopyContent = (text: string, id: string) => {
     navigator.clipboard.writeText(text);
@@ -423,6 +451,18 @@ export const ClientLiveSMS: React.FC = () => {
             >
               <Download className="w-4 h-4 text-slate-400" />
               <span className="hidden sm:inline">Export CSV</span>
+            </button>
+
+            {/* Clear Logs Button (Only clears client view, Admin keeps all master logs) */}
+            <button
+              id="btn-client-clear-sms"
+              type="button"
+              onClick={handleClientClearLogs}
+              className="px-3 py-2 rounded-xl bg-slate-900 hover:bg-rose-950/40 border border-slate-800 hover:border-rose-800/60 text-xs font-semibold text-slate-300 hover:text-rose-300 flex items-center gap-1.5 transition-all cursor-pointer"
+              title="Clear your stream view"
+            >
+              <Trash2 className="w-4 h-4 text-rose-400" />
+              <span className="hidden sm:inline">Clear Logs</span>
             </button>
           </div>
         </div>
@@ -849,11 +889,11 @@ export const ClientLiveSMS: React.FC = () => {
                       </div>
                     </th>
 
-                    {/* COLUMN 5: SMS CONTENT & OTP */}
+                    {/* COLUMN 5: SMS */}
                     <th className={`${zoomMode === 'ultra' ? 'py-2.5 px-2.5' : 'py-3.5 px-3.5'} font-bold min-w-[300px]`}>
                       <div className="flex items-center gap-1.5 text-amber-400">
                         <MessageSquare className="w-3.5 h-3.5 text-amber-400" />
-                        <span>SMS CONTENT & OTP</span>
+                        <span>SMS</span>
                       </div>
                     </th>
                   </tr>
@@ -949,32 +989,24 @@ export const ClientLiveSMS: React.FC = () => {
                             </span>
                           </td>
 
-                          {/* COLUMN 5: SMS CONTENT & OTP */}
+                          {/* COLUMN 5: SMS */}
                           <td
                             className={`${
                               zoomMode === 'ultra' ? 'py-2.5 px-2.5' : 'py-3.5 px-3.5'
                             } text-slate-200 leading-relaxed`}
                           >
-                            <div className="space-y-1.5">
-                              {extractedOtp && (
-                                <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-md bg-amber-500/20 border border-amber-500/50 text-amber-300 font-mono font-bold text-xs shadow-sm select-all">
-                                  <KeyRound className="w-3 h-3 text-amber-400" />
-                                  <span>OTP: {extractedOtp}</span>
-                                </div>
-                              )}
-                              <p
-                                style={customSmsText ? { color: customSmsText } : undefined}
-                                className={`${
-                                  customFontSize === 'large'
-                                    ? 'text-sm'
-                                    : customFontSize === 'compact'
-                                    ? 'text-[11px]'
-                                    : 'text-xs'
-                                } text-slate-200 font-sans select-text break-words leading-relaxed`}
-                              >
-                                {msg.message}
-                              </p>
-                            </div>
+                            <p
+                              style={customSmsText ? { color: customSmsText } : undefined}
+                              className={`${
+                                customFontSize === 'large'
+                                  ? 'text-sm'
+                                  : customFontSize === 'compact'
+                                  ? 'text-[11px]'
+                                  : 'text-xs'
+                              } text-slate-200 font-sans select-text break-words leading-relaxed`}
+                            >
+                              {msg.message}
+                            </p>
                           </td>
                         </tr>
                       );

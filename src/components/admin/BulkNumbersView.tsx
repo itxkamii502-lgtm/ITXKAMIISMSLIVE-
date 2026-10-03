@@ -95,9 +95,20 @@ export const BulkNumbersView: React.FC<BulkNumbersViewProps> = ({ token }) => {
     totalChecked: number;
     newCount: number;
     duplicateCount: number;
-    duplicates: { number: string; reason: string; isCurrentRange: boolean }[];
+    duplicates: { number: string; reason: string; isCurrentRange: boolean; rangeName?: string }[];
+    uniqueNumbers?: string[];
   } | null>(null);
   const [isCheckingDuplicates, setIsCheckingDuplicates] = useState(false);
+  const [isAuditingAllRanges, setIsAuditingAllRanges] = useState(false);
+  const [auditResultModal, setAuditResultModal] = useState<{
+    totalRanges: number;
+    totalNumbersBefore: number;
+    totalNumbersAfter: number;
+    duplicatesRemoved: number;
+    rangesModified: { id: string; name: string; prefix: string; beforeCount: number; afterCount: number; removedCount: number }[];
+    sampleDuplicates: { number: string; keptInRange: string; removedFromRange: string }[];
+    message: string;
+  } | null>(null);
 
   // Manage Range Modal
   const [managingRange, setManagingRange] = useState<NumberRange | null>(null);
@@ -724,11 +735,89 @@ export const BulkNumbersView: React.FC<BulkNumbersViewProps> = ({ token }) => {
       if (res.ok) {
         const data = await res.json();
         setDuplicateCheckResult(data);
+        if (data.duplicateCount > 0) {
+          setStatusMessage({
+            type: 'info',
+            text: `Detected ${data.duplicateCount} duplicate number(s) across ranges. Click "Auto-Clean Duplicates" to strip them automatically.`,
+          });
+        } else {
+          setStatusMessage({
+            type: 'success',
+            text: `100% Unique: All ${data.newCount} numbers are completely unique across all ranges.`,
+          });
+        }
       }
     } catch (err) {
       console.error('Failed to check duplicates', err);
     } finally {
       setIsCheckingDuplicates(false);
+    }
+  };
+
+  // 1-Click Auto-Clean all duplicates from buffer across all ranges
+  const handleAutoCleanAllDuplicates = async () => {
+    if (parsedNumbers.length === 0) return;
+    setIsCheckingDuplicates(true);
+    try {
+      const res = await fetch('/api/ranges/check-duplicates', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          numbers: parsedNumbers,
+          targetRangeId: rangeMode === 'existing' ? selectedRangeId : undefined,
+        }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const validList: string[] = data.uniqueNumbers || [];
+        setNumbersText(validList.join('\n'));
+        setDuplicateCheckResult(data);
+        setStatusMessage({
+          type: data.duplicateCount > 0 ? 'success' : 'info',
+          text: data.duplicateCount > 0
+            ? `Auto-removed ${data.duplicateCount} duplicate number(s)! ${validList.length} unique numbers remaining in buffer.`
+            : `Buffer verified: All ${validList.length} numbers are 100% unique across all ranges.`,
+        });
+      }
+    } catch (err) {
+      console.error('Failed to auto clean duplicates', err);
+    } finally {
+      setIsCheckingDuplicates(false);
+    }
+  };
+
+  // Audit and permanently deduplicate all ranges in the system (1 Number = 1 Range Only rule)
+  const handleAuditAndDeduplicateAll = async () => {
+    if (!confirm('This will audit all configured ranges across the system and permanently remove any duplicate numbers across ranges, guaranteeing that every number belongs to only 1 range. Proceed?')) {
+      return;
+    }
+    setIsAuditingAllRanges(true);
+    try {
+      const res = await fetch('/api/ranges/deduplicate-all', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setAuditResultModal(data);
+        setStatusMessage({
+          type: 'success',
+          text: data.message,
+        });
+        await fetchRanges();
+      } else {
+        alert(data.error || 'Audit operation failed');
+      }
+    } catch (err: any) {
+      alert(`Error auditing ranges: ${err.message}`);
+    } finally {
+      setIsAuditingAllRanges(false);
     }
   };
 
@@ -790,8 +879,20 @@ export const BulkNumbersView: React.FC<BulkNumbersViewProps> = ({ token }) => {
           <div className="flex items-center gap-2.5 w-full sm:w-auto">
             <button
               type="button"
+              onClick={handleAuditAndDeduplicateAll}
+              disabled={isAuditingAllRanges || ranges.length === 0}
+              className="flex-1 sm:flex-none inline-flex items-center justify-center gap-2 px-3.5 py-2 rounded-xl bg-emerald-950/80 border border-emerald-500/40 hover:bg-emerald-900/60 text-emerald-300 hover:text-white text-xs font-semibold shadow-sm transition-all cursor-pointer disabled:opacity-50"
+              title="Audit all ranges and remove duplicate numbers across ranges"
+              id="audit-deduplicate-all-ranges-btn"
+            >
+              <ShieldCheck className={`w-3.5 h-3.5 text-emerald-400 ${isAuditingAllRanges ? 'animate-spin' : ''}`} />
+              <span>{isAuditingAllRanges ? 'Auditing Ranges...' : 'Audit & Clean All Ranges'}</span>
+            </button>
+
+            <button
+              type="button"
               onClick={handleDownloadSampleCsv}
-              className="flex-1 sm:flex-none inline-flex items-center justify-center gap-2 px-3.5 py-2 rounded-xl bg-slate-950 border border-slate-800 hover:border-slate-700 text-slate-300 hover:text-white text-xs font-semibold shadow-sm transition-all"
+              className="flex-1 sm:flex-none inline-flex items-center justify-center gap-2 px-3.5 py-2 rounded-xl bg-slate-950 border border-slate-800 hover:border-slate-700 text-slate-300 hover:text-white text-xs font-semibold shadow-sm transition-all cursor-pointer"
               id="download-sample-csv-btn"
             >
               <Download className="w-3.5 h-3.5 text-blue-400" />
@@ -1086,12 +1187,23 @@ export const BulkNumbersView: React.FC<BulkNumbersViewProps> = ({ token }) => {
                 <div className="flex items-center gap-2 flex-wrap">
                   <button
                     type="button"
+                    onClick={handleAutoCleanAllDuplicates}
+                    disabled={isCheckingDuplicates || parsedNumbers.length === 0}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] font-bold shadow-sm transition-all disabled:opacity-40 cursor-pointer"
+                    title="Automatically check and remove all duplicate numbers from buffer across all ranges"
+                  >
+                    <ShieldCheck className="w-3.5 h-3.5 text-white" />
+                    <span>{isCheckingDuplicates ? 'Scanning Duplicates...' : 'Auto-Clean Duplicates'}</span>
+                  </button>
+
+                  <button
+                    type="button"
                     onClick={handleCheckDuplicates}
                     disabled={isCheckingDuplicates || parsedNumbers.length === 0}
-                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-950/50 border border-emerald-500/30 hover:bg-emerald-900/40 text-emerald-300 text-[11px] font-medium transition-colors disabled:opacity-40 cursor-pointer"
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-950 border border-slate-800 hover:border-slate-700 text-slate-300 hover:text-white text-[11px] font-medium transition-colors disabled:opacity-40 cursor-pointer"
                     title="Inspect if any numbers in this buffer already exist in any range across the system"
                   >
-                    <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
+                    <Search className="w-3.5 h-3.5 text-blue-400" />
                     <span>{isCheckingDuplicates ? 'Checking...' : 'Check Conflicts'}</span>
                   </button>
 
@@ -1102,7 +1214,7 @@ export const BulkNumbersView: React.FC<BulkNumbersViewProps> = ({ token }) => {
                     className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-950 border border-slate-800 hover:border-slate-700 text-slate-300 hover:text-white text-[11px] font-medium transition-colors disabled:opacity-40 cursor-pointer"
                     title="Remove duplicate numbers within this buffer"
                   >
-                    <span>Remove Duplicates</span>
+                    <span>Remove Batch Dups</span>
                   </button>
 
                   <button
@@ -1183,21 +1295,43 @@ export const BulkNumbersView: React.FC<BulkNumbersViewProps> = ({ token }) => {
                     </div>
                   </div>
 
+                  {duplicateCheckResult.duplicateCount > 0 && duplicateCheckResult.uniqueNumbers && (
+                    <div className="pt-1">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (duplicateCheckResult.uniqueNumbers) {
+                            setNumbersText(duplicateCheckResult.uniqueNumbers.join('\n'));
+                            setStatusMessage({
+                              type: 'success',
+                              text: `Cleaned buffer! Removed ${duplicateCheckResult.duplicateCount} duplicate numbers. ${duplicateCheckResult.uniqueNumbers.length} unique numbers remaining.`,
+                            });
+                            setDuplicateCheckResult(null);
+                          }
+                        }}
+                        className="w-full py-2 px-3 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition-all flex items-center justify-center gap-1.5 shadow-md shadow-emerald-950/40 cursor-pointer"
+                      >
+                        <CheckCircle2 className="w-4 h-4" />
+                        <span>Auto-Remove These {duplicateCheckResult.duplicateCount} Duplicates from Buffer</span>
+                      </button>
+                    </div>
+                  )}
+
                   {duplicateCheckResult.duplicates.length > 0 && (
                     <div className="space-y-1 pt-1">
                       <div className="text-[11px] font-semibold text-amber-300">
                         The following numbers will automatically be skipped during save:
                       </div>
-                      <div className="max-h-24 overflow-y-auto space-y-1 font-mono text-[11px] text-slate-400">
-                        {duplicateCheckResult.duplicates.slice(0, 10).map((d, i) => (
+                      <div className="max-h-28 overflow-y-auto space-y-1 font-mono text-[11px] text-slate-400">
+                        {duplicateCheckResult.duplicates.slice(0, 15).map((d, i) => (
                           <div key={i} className="flex items-center justify-between px-2 py-0.5 rounded bg-slate-900">
                             <span className="text-slate-300">{d.number}</span>
                             <span className="text-[10px] text-amber-400">{d.reason}</span>
                           </div>
                         ))}
-                        {duplicateCheckResult.duplicates.length > 10 && (
+                        {duplicateCheckResult.duplicates.length > 15 && (
                           <div className="text-[10px] text-slate-500 italic text-center">
-                            +{duplicateCheckResult.duplicates.length - 10} more conflicts
+                            +{duplicateCheckResult.duplicates.length - 15} more conflicts
                           </div>
                         )}
                       </div>
@@ -1795,6 +1929,111 @@ export const BulkNumbersView: React.FC<BulkNumbersViewProps> = ({ token }) => {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* GLOBAL AUDIT & DEDUPLICATION REPORT MODAL */}
+      {auditResultModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-950/85 backdrop-blur-md animate-fadeIn">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-xl shadow-2xl overflow-hidden p-5 sm:p-6 space-y-4 max-h-[90vh] flex flex-col">
+            <div className="flex items-start justify-between gap-3 border-b border-slate-800/80 pb-3">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center text-emerald-400 shrink-0">
+                  <ShieldCheck className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-white tracking-tight">
+                    Global Ranges Duplicate Audit Report
+                  </h3>
+                  <p className="text-xs text-slate-400">
+                    Rule Enforced: 1 Phone Number = 1 Range Only
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setAuditResultModal(null)}
+                className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition-colors"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Stats summary */}
+            <div className="grid grid-cols-3 gap-2.5 text-center font-mono">
+              <div className="p-3 rounded-xl bg-slate-950 border border-slate-800">
+                <div className="text-[10px] text-slate-400 uppercase font-semibold">Total Ranges</div>
+                <div className="text-lg font-bold text-white mt-0.5">{auditResultModal.totalRanges}</div>
+              </div>
+              <div className="p-3 rounded-xl bg-slate-950 border border-slate-800">
+                <div className="text-[10px] text-emerald-400 uppercase font-semibold">Active Unique</div>
+                <div className="text-lg font-bold text-emerald-400 mt-0.5">{auditResultModal.totalNumbersAfter.toLocaleString()}</div>
+              </div>
+              <div className="p-3 rounded-xl bg-slate-950 border border-slate-800">
+                <div className="text-[10px] text-amber-400 uppercase font-semibold">Duplicates Cleaned</div>
+                <div className="text-lg font-bold text-amber-400 mt-0.5">{auditResultModal.duplicatesRemoved.toLocaleString()}</div>
+              </div>
+            </div>
+
+            <div className="p-3 rounded-xl bg-emerald-950/40 border border-emerald-500/30 text-emerald-200 text-xs flex items-center gap-2">
+              <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+              <span>{auditResultModal.message}</span>
+            </div>
+
+            {/* List of modified ranges if any */}
+            {auditResultModal.rangesModified && auditResultModal.rangesModified.length > 0 && (
+              <div className="space-y-2 flex-1 overflow-y-auto">
+                <div className="text-xs font-bold text-white flex items-center gap-1.5">
+                  <Layers className="w-3.5 h-3.5 text-blue-400" />
+                  <span>Modified Ranges ({auditResultModal.rangesModified.length}):</span>
+                </div>
+                <div className="space-y-1.5 text-xs">
+                  {auditResultModal.rangesModified.map((rm: any) => (
+                    <div key={rm.id} className="p-2.5 rounded-xl bg-slate-950 border border-slate-800 flex items-center justify-between gap-2">
+                      <div>
+                        <div className="font-bold text-white">{rm.name} (+{rm.prefix})</div>
+                        <div className="text-[10px] text-slate-400 font-mono">
+                          Was {rm.beforeCount} numbers → Now {rm.afterCount} numbers
+                        </div>
+                      </div>
+                      <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-amber-950 text-amber-300 border border-amber-500/30">
+                        -{rm.removedCount} duplicates
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Sample duplicate numbers removed */}
+            {auditResultModal.sampleDuplicates && auditResultModal.sampleDuplicates.length > 0 && (
+              <div className="space-y-1.5">
+                <div className="text-[11px] font-semibold text-slate-300">
+                  Sample Duplicate Numbers Resolved:
+                </div>
+                <div className="max-h-28 overflow-y-auto space-y-1 font-mono text-[11px]">
+                  {auditResultModal.sampleDuplicates.map((sd: any, idx: number) => (
+                    <div key={idx} className="p-1.5 rounded bg-slate-950 border border-slate-800/80 flex items-center justify-between gap-2">
+                      <span className="text-emerald-400 font-bold">{sd.number}</span>
+                      <span className="text-[10px] text-slate-400">
+                        Kept in "{sd.keptInRange}" • Removed from "{sd.removedFromRange}"
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <div className="pt-2 border-t border-slate-800 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setAuditResultModal(null)}
+                className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold transition-colors cursor-pointer"
+              >
+                Close Audit Report
+              </button>
+            </div>
           </div>
         </div>
       )}

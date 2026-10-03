@@ -62,7 +62,7 @@ export const LoginScreen: React.FC = () => {
     }
 
     if (lockedUntil && Date.now() < lockedUntil) {
-      setError('Yeh Client ID abhi locked hai. Baraye meherbani timer khatam hone tak intezar karein.');
+      setError('This Client ID is temporarily locked. Please wait until the lockout timer expires.');
       return;
     }
 
@@ -84,11 +84,6 @@ export const LoginScreen: React.FC = () => {
 
   return (
     <div className="min-h-screen w-full bg-slate-950 flex flex-col items-center justify-center p-4 sm:p-6 relative overflow-hidden font-sans selection:bg-emerald-500 selection:text-slate-950">
-      {/* Top Floating Dark & Sun Theme Mode Toggle */}
-      <div className="absolute top-4 right-4 sm:top-6 sm:right-6 z-20">
-        <ThemeToggle />
-      </div>
-
       {/* Ambient background glows */}
       <div className="absolute inset-0 bg-[radial-gradient(ellipse_80%_80%_at_50%_-20%,rgba(16,185,129,0.12),rgba(255,255,255,0))]" />
       <div className="absolute -top-40 -right-40 w-96 h-96 bg-emerald-500/10 rounded-full blur-3xl pointer-events-none" />
@@ -186,7 +181,7 @@ export const LoginScreen: React.FC = () => {
                 </div>
 
                 <p className="text-[10px] text-rose-300/80 italic text-center">
-                  ⚠️ Yeh Client ID is waqt kisi ke paas bhi open nahi ho sakti. Timer khatam hone ka intezar karein ya Admin se contact karein.
+                  Notice: This Client ID cannot be accessed during lockout. Please wait for the cooldown timer to expire or contact the system administrator.
                 </p>
               </motion.div>
             )}
