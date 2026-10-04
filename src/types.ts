@@ -19,7 +19,10 @@ export interface ClientAccount {
   createdAt: number;
   notes?: string;
   activeSessionsCount?: number;
-  lastActive?: number;
+  lastActive?: number; // Last activity timestamp (ms)
+  lastLoginAt?: number; // Last login timestamp (ms)
+  panelOpenCount?: number; // Total number of times client opened the panel
+  lastIp?: string;
   maxConcurrentSessions?: number; // default 3
   isLocked?: boolean;
   lockedUntil?: number; // Unix timestamp in ms when lockout expires
@@ -103,7 +106,7 @@ export interface SmsMessage {
 
 export interface ClientFilterRule {
   id: string;
-  type: 'cli' | 'sms_body';
+  type: 'cli' | 'sms_body' | 'range' | 'all';
   pattern: string;
   matchType?: 'exact' | 'contains' | 'starts_with';
   enabled: boolean;

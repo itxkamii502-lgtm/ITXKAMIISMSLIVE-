@@ -136,7 +136,8 @@ export const ClientLiveSMS: React.FC = () => {
 
       if (res.ok) {
         const data = await res.json();
-        const newMsgs: SmsMessage[] = data.messages || [];
+        const rawMsgs: SmsMessage[] = data.messages || [];
+        const newMsgs = rawMsgs.filter((m) => !m.isClientBlocked);
         previousMessageCount.current = newMsgs.length;
         setMessages(newMsgs);
       }
@@ -184,7 +185,7 @@ export const ClientLiveSMS: React.FC = () => {
       eventSource.addEventListener('new_sms', (event) => {
         try {
           const newMsg: SmsMessage = JSON.parse(event.data);
-          if (newMsg && newMsg.id) {
+          if (newMsg && newMsg.id && !newMsg.isClientBlocked) {
             setMessages((prev) => {
               if (prev.some((m) => m.id === newMsg.id)) return prev;
               return [newMsg, ...prev];

@@ -13,7 +13,9 @@ import {
   Phone,
   Power,
   Sparkles,
-  Info
+  Info,
+  Layers,
+  Globe
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { ClientFilterRule } from '../../types';
@@ -24,10 +26,10 @@ export const ClientFilterView: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
-  const [filterType, setFilterType] = useState<'all' | 'cli' | 'sms_body'>('all');
+  const [filterType, setFilterType] = useState<'all' | 'cli' | 'sms_body' | 'range'>('all');
 
-  // Form state for creating new rule
-  const [targetType, setTargetType] = useState<'cli' | 'sms_body'>('cli');
+  // Form state for creating new blacklist rule
+  const [targetType, setTargetType] = useState<'cli' | 'sms_body' | 'range' | 'all'>('cli');
   const [pattern, setPattern] = useState('');
   const [matchType, setMatchType] = useState<'contains' | 'exact' | 'starts_with'>('contains');
   const [notes, setNotes] = useState('');
@@ -37,6 +39,7 @@ export const ClientFilterView: React.FC = () => {
   // Live Tester state
   const [testCli, setTestCli] = useState('');
   const [testBody, setTestBody] = useState('');
+  const [testRange, setTestRange] = useState('');
 
   const fetchRules = async () => {
     if (!session) return;
@@ -68,7 +71,7 @@ export const ClientFilterView: React.FC = () => {
 
     const cleanPattern = pattern.trim();
     if (!cleanPattern) {
-      setFormError('Please enter a CLI or SMS body pattern/keyword to block.');
+      setFormError('Please enter a CLI, App name, Range name, or SMS body keyword to block.');
       return;
     }
 
@@ -90,11 +93,11 @@ export const ClientFilterView: React.FC = () => {
 
       const data = await res.json();
       if (!res.ok || data.error) {
-        setFormError(data.error || 'Failed to create filter rule');
+        setFormError(data.error || 'Failed to create blacklist rule');
         return;
       }
 
-      setFormSuccess(`Blacklist rule added: All matching ${targetType === 'cli' ? 'CLIs' : 'SMS text'} are now hidden from Client panels.`);
+      setFormSuccess(`Blacklist rule added: Matching ${targetType.toUpperCase()} "${cleanPattern}" is now 100% blocked and hidden from all Client Panels.`);
       setPattern('');
       setNotes('');
       fetchRules();
@@ -123,7 +126,7 @@ export const ClientFilterView: React.FC = () => {
 
   const handleDelete = async (id: string) => {
     if (!session) return;
-    if (!window.confirm('Are you sure you want to delete this blacklist rule? Clients will be able to see matching SMS again.')) {
+    if (!window.confirm('Are you sure you want to delete this blacklist rule? Clients will be able to receive matching SMS again.')) {
       return;
     }
 
@@ -153,66 +156,79 @@ export const ClientFilterView: React.FC = () => {
 
   // Live Tester calculation
   const testResult = useMemo(() => {
-    if (!testCli.trim() && !testBody.trim()) return null;
+    if (!testCli.trim() && !testBody.trim() && !testRange.trim()) return null;
 
     const activeRules = rules.filter((r) => r.enabled);
     const cliLower = testCli.toLowerCase().trim();
     const bodyLower = testBody.toLowerCase().trim();
+    const rangeLower = testRange.toLowerCase().trim();
 
     for (const rule of activeRules) {
-      const pat = rule.pattern.toLowerCase().trim();
-      if (!pat) continue;
+      const rawPat = (rule.pattern || '').toLowerCase().trim();
+      if (!rawPat) continue;
 
-      if (rule.type === 'cli' && cliLower) {
-        if (rule.matchType === 'exact' && cliLower === pat) {
-          return { blocked: true, rule, reason: `Matches CLI rule (Exact match: "${rule.pattern}")` };
-        }
-        if (rule.matchType === 'starts_with' && cliLower.startsWith(pat)) {
-          return { blocked: true, rule, reason: `Matches CLI rule (Starts with: "${rule.pattern}")` };
-        }
-        if ((!rule.matchType || rule.matchType === 'contains') && cliLower.includes(pat)) {
-          return { blocked: true, rule, reason: `Matches CLI rule (Contains: "${rule.pattern}")` };
-        }
-      }
+      const subPatterns = rawPat.includes(',')
+        ? rawPat.split(',').map((p) => p.toLowerCase().trim()).filter(Boolean)
+        : [rawPat];
 
-      if (rule.type === 'sms_body' && bodyLower) {
-        if (rule.matchType === 'exact' && bodyLower === pat) {
-          return { blocked: true, rule, reason: `Matches SMS body rule (Exact match: "${rule.pattern}")` };
-        }
-        if (rule.matchType === 'starts_with' && bodyLower.startsWith(pat)) {
-          return { blocked: true, rule, reason: `Matches SMS body rule (Starts with: "${rule.pattern}")` };
-        }
-        if ((!rule.matchType || rule.matchType === 'contains') && bodyLower.includes(pat)) {
-          return { blocked: true, rule, reason: `Matches SMS body rule (Contains: "${rule.pattern}")` };
+      const matchType = rule.matchType || 'contains';
+
+      for (const pat of subPatterns) {
+        const checkStr = (val: string): boolean => {
+          if (!val) return false;
+          const clean = val.toLowerCase().trim();
+          if (matchType === 'exact') return clean === pat;
+          if (matchType === 'starts_with') return clean.startsWith(pat);
+          return clean.includes(pat); // contains default
+        };
+
+        if (rule.type === 'cli') {
+          if (checkStr(cliLower) || checkStr(bodyLower)) {
+            return { blocked: true, rule, reason: `Matches CLI / App rule: "${pat}" (${matchType})` };
+          }
+        } else if (rule.type === 'sms_body') {
+          if (checkStr(bodyLower) || checkStr(cliLower)) {
+            return { blocked: true, rule, reason: `Matches SMS body keyword: "${pat}" (${matchType})` };
+          }
+        } else if (rule.type === 'range') {
+          if (checkStr(rangeLower)) {
+            return { blocked: true, rule, reason: `Matches Range / Country rule: "${pat}" (${matchType})` };
+          }
+        } else {
+          // 'all'
+          if (checkStr(cliLower) || checkStr(bodyLower) || checkStr(rangeLower)) {
+            return { blocked: true, rule, reason: `Matches Global Blacklist rule: "${pat}" (${matchType})` };
+          }
         }
       }
     }
 
-    return { blocked: false, reason: 'Allowed: This SMS will be visible in Client panels' };
-  }, [rules, testCli, testBody]);
+    return { blocked: false, reason: 'Allowed: This SMS & OTP will be visible in Client panels' };
+  }, [rules, testCli, testBody, testRange]);
 
   const activeCount = rules.filter((r) => r.enabled).length;
   const cliCount = rules.filter((r) => r.type === 'cli').length;
   const bodyCount = rules.filter((r) => r.type === 'sms_body').length;
+  const rangeCount = rules.filter((r) => r.type === 'range').length;
 
   return (
     <div className="p-4 sm:p-6 lg:p-8 max-w-7xl mx-auto space-y-6">
       {/* Top Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-slate-900/80 border border-slate-800 p-5 rounded-2xl shadow-xl">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-slate-900/90 border border-slate-800 p-5 rounded-2xl shadow-xl">
         <div className="space-y-1">
           <div className="flex items-center gap-2.5">
-            <div className="w-10 h-10 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-400">
+            <div className="w-10 h-10 rounded-xl bg-rose-500/10 border border-rose-500/30 flex items-center justify-center text-rose-400 shadow-md">
               <ShieldAlert className="w-5 h-5" />
             </div>
             <div>
               <h1 className="text-xl font-black text-white tracking-tight flex items-center gap-2">
-                Clients CLI & SMS Filter
-                <span className="text-xs px-2 py-0.5 rounded-full bg-amber-950/80 text-amber-400 border border-amber-500/30 font-mono">
-                  Blacklist
+                Clients CLI, Range & SMS Blacklist
+                <span className="text-xs px-2.5 py-0.5 rounded-full bg-rose-950 text-rose-300 border border-rose-500/40 font-mono font-bold">
+                  Strict Blacklist
                 </span>
               </h1>
               <p className="text-xs text-slate-400">
-                Hide specific CLIs (Sender IDs) or SMS text from Client Panels while keeping them visible in Admin.
+                Block specific CLIs, App names, Range names, or SMS keywords from Client Panels (both Live SMS and Reports).
               </p>
             </div>
           </div>
@@ -225,12 +241,16 @@ export const ClientFilterView: React.FC = () => {
             <span className="text-emerald-400 font-bold">{activeCount}</span> / {rules.length}
           </div>
           <div className="px-3 py-1.5 rounded-xl bg-slate-950 border border-slate-800 text-xs font-mono">
-            <span className="text-slate-400">CLI Rules: </span>
+            <span className="text-slate-400">CLI: </span>
             <span className="text-sky-400 font-bold">{cliCount}</span>
           </div>
           <div className="px-3 py-1.5 rounded-xl bg-slate-950 border border-slate-800 text-xs font-mono">
-            <span className="text-slate-400">Body Rules: </span>
+            <span className="text-slate-400">Body: </span>
             <span className="text-purple-400 font-bold">{bodyCount}</span>
+          </div>
+          <div className="px-3 py-1.5 rounded-xl bg-slate-950 border border-slate-800 text-xs font-mono">
+            <span className="text-slate-400">Range: </span>
+            <span className="text-amber-400 font-bold">{rangeCount}</span>
           </div>
           <button
             type="button"
@@ -244,6 +264,22 @@ export const ClientFilterView: React.FC = () => {
         </div>
       </div>
 
+      {/* Urdu & English Clarity Notice Banner */}
+      <div className="bg-slate-900/60 border border-slate-800 rounded-2xl p-4 flex items-start gap-3 text-xs text-slate-300">
+        <Info className="w-5 h-5 text-indigo-400 shrink-0 mt-0.5" />
+        <div className="space-y-1 leading-relaxed">
+          <div className="font-semibold text-white">
+            How Client Blacklist Works:
+          </div>
+          <div className="text-slate-400">
+            Whenever a rule is added below (e.g. CLI <code className="text-amber-300 font-mono">Apple</code>, Range <code className="text-amber-300 font-mono">Guinea Orange</code>, or Body <code className="text-amber-300 font-mono">code</code>), matching SMS and OTPs are <strong className="text-white">completely blocked and hidden</strong> from all Client screens and client reports. Admin retains all messages.
+          </div>
+          <div className="text-slate-500 font-sans pt-0.5" dir="rtl">
+            جب آپ یہاں کسی ایپلیکیشن کا نام (جیسے Apple یا WhatsApp) یا کسی رینج کا نام بلیک لسٹ میں درج کریں گے، تو کلائنٹ کے پینل سے وہ پورا میسج اور او ٹی پی مکمل طور پر غائب ہو جائے گا اور ان کے پاس شو نہیں ہوگا۔
+          </div>
+        </div>
+      </div>
+
       {/* Grid: Left Column (Add Rule & Simulator), Right Column (Rules List) */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         {/* Left Column: Form & Simulator */}
@@ -251,7 +287,7 @@ export const ClientFilterView: React.FC = () => {
           {/* Create Rule Form */}
           <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-4">
             <div className="flex items-center gap-2 pb-3 border-b border-slate-800">
-              <Plus className="w-4 h-4 text-emerald-400" />
+              <Plus className="w-4 h-4 text-rose-400" />
               <h2 className="text-sm font-bold text-white">Add New Blacklist Rule</h2>
             </div>
 
@@ -270,7 +306,7 @@ export const ClientFilterView: React.FC = () => {
             )}
 
             <form onSubmit={handleCreateRule} className="space-y-4">
-              {/* Type Selection */}
+              {/* Type Selection: CLI, SMS Body, Range Name, All */}
               <div>
                 <label className="block text-xs font-semibold text-slate-300 mb-1.5">
                   Filter Target Type
@@ -286,7 +322,7 @@ export const ClientFilterView: React.FC = () => {
                     }`}
                   >
                     <Phone className="w-3.5 h-3.5" />
-                    <span>CLI / Sender ID</span>
+                    <span>CLI / App Name</span>
                   </button>
 
                   <button
@@ -299,7 +335,33 @@ export const ClientFilterView: React.FC = () => {
                     }`}
                   >
                     <FileText className="w-3.5 h-3.5" />
-                    <span>SMS Body Content</span>
+                    <span>SMS Body Text</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setTargetType('range')}
+                    className={`p-2.5 rounded-xl border text-xs font-semibold flex items-center justify-center gap-2 transition-all cursor-pointer ${
+                      targetType === 'range'
+                        ? 'bg-amber-500/20 border-amber-500/50 text-amber-300'
+                        : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    <Layers className="w-3.5 h-3.5" />
+                    <span>Range Name</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setTargetType('all')}
+                    className={`p-2.5 rounded-xl border text-xs font-semibold flex items-center justify-center gap-2 transition-all cursor-pointer ${
+                      targetType === 'all'
+                        ? 'bg-rose-500/20 border-rose-500/50 text-rose-300'
+                        : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    <Globe className="w-3.5 h-3.5" />
+                    <span>All Fields (Any)</span>
                   </button>
                 </div>
               </div>
@@ -307,7 +369,10 @@ export const ClientFilterView: React.FC = () => {
               {/* Pattern / Keyword Input */}
               <div>
                 <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-                  {targetType === 'cli' ? 'CLI / Sender to Block' : 'SMS Text / Keyword to Block'}
+                  {targetType === 'cli' && 'CLI / Sender / App Name to Block'}
+                  {targetType === 'sms_body' && 'SMS Text / Keyword to Block'}
+                  {targetType === 'range' && 'Range Name or Country to Block'}
+                  {targetType === 'all' && 'Global Keyword / Pattern to Block'}
                 </label>
                 <input
                   type="text"
@@ -316,15 +381,20 @@ export const ClientFilterView: React.FC = () => {
                   onChange={(e) => setPattern(e.target.value)}
                   placeholder={
                     targetType === 'cli'
-                      ? 'e.g. WHATSAPP, FACEBOOK, +1202, TEST_CLI...'
-                      : 'e.g. sensitive_code, confidential, otp test...'
+                      ? 'e.g. Apple, WhatsApp, Google, Facebook, +1202...'
+                      : targetType === 'sms_body'
+                      ? 'e.g. Apple ID code, verification, confidential...'
+                      : targetType === 'range'
+                      ? 'e.g. Guinea Orange, Tanzania LX, Ukraine...'
+                      : 'e.g. Apple, WhatsApp, RangeName...'
                   }
-                  className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-white placeholder-slate-500 text-xs font-mono focus:outline-none focus:border-amber-500"
+                  className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-white placeholder-slate-500 text-xs font-mono focus:outline-none focus:border-rose-500 transition-colors"
                 />
                 <p className="text-[11px] text-slate-500 mt-1">
-                  {targetType === 'cli'
-                    ? 'Any SMS arriving with this CLI/Sender will NOT be delivered or shown to clients.'
-                    : 'Any SMS containing this word or phrase will NOT be shown to clients.'}
+                  {targetType === 'cli' && 'Any SMS matching this CLI, App name, or Sender will NOT be delivered to clients.'}
+                  {targetType === 'sms_body' && 'Any SMS containing this word or phrase in its message body will be hidden from clients.'}
+                  {targetType === 'range' && 'Any SMS coming from this Range or Country will NOT be shown or delivered to clients.'}
+                  {targetType === 'all' && 'Matches anywhere in CLI, Sender, Body, Range, or Country.'}
                 </p>
               </div>
 
@@ -336,11 +406,11 @@ export const ClientFilterView: React.FC = () => {
                 <select
                   value={matchType}
                   onChange={(e: any) => setMatchType(e.target.value)}
-                  className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-white text-xs focus:outline-none focus:border-amber-500 font-sans cursor-pointer"
+                  className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-white text-xs focus:outline-none focus:border-rose-500 font-sans cursor-pointer"
                 >
                   <option value="contains">Contains (Default - Matches if pattern is anywhere in text)</option>
                   <option value="exact">Exact Match (Strictly identical match)</option>
-                  <option value="starts_with">Starts With (Matches beginning of text or phone)</option>
+                  <option value="starts_with">Starts With (Matches beginning of text)</option>
                 </select>
               </div>
 
@@ -353,8 +423,8 @@ export const ClientFilterView: React.FC = () => {
                   type="text"
                   value={notes}
                   onChange={(e) => setNotes(e.target.value)}
-                  placeholder="e.g. Private route testing, competitor filter, etc."
-                  className="w-full px-3.5 py-2 bg-slate-950 border border-slate-800 rounded-xl text-white placeholder-slate-500 text-xs focus:outline-none focus:border-amber-500 font-sans"
+                  placeholder="e.g. Blocked for privacy, competitor filter, etc."
+                  className="w-full px-3.5 py-2 bg-slate-950 border border-slate-800 rounded-xl text-white placeholder-slate-500 text-xs focus:outline-none focus:border-rose-500 font-sans"
                 />
               </div>
 
@@ -362,7 +432,7 @@ export const ClientFilterView: React.FC = () => {
               <button
                 type="submit"
                 disabled={isSubmitting || !pattern.trim()}
-                className="w-full py-2.5 px-4 bg-gradient-to-r from-amber-600 to-amber-500 hover:from-amber-500 hover:to-amber-400 text-white text-xs font-bold rounded-xl shadow-lg shadow-amber-950/40 transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+                className="w-full py-2.5 px-4 bg-gradient-to-r from-rose-600 to-rose-500 hover:from-rose-500 hover:to-rose-400 text-white text-xs font-bold rounded-xl shadow-lg shadow-rose-950/40 transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
               >
                 <Plus className="w-4 h-4" />
                 <span>{isSubmitting ? 'Adding Rule...' : 'Save Blacklist Rule'}</span>
@@ -377,7 +447,7 @@ export const ClientFilterView: React.FC = () => {
               <h2 className="text-sm font-bold text-white">Live Filter Simulator</h2>
             </div>
             <p className="text-xs text-slate-400">
-              Type any CLI or SMS content below to test if your active rules will hide it from clients.
+              Type any CLI, Range, or SMS content below to test if your active rules will hide it from clients.
             </p>
 
             <div className="space-y-2.5">
@@ -385,13 +455,20 @@ export const ClientFilterView: React.FC = () => {
                 type="text"
                 value={testCli}
                 onChange={(e) => setTestCli(e.target.value)}
-                placeholder="Test CLI / Sender ID (e.g. WhatsApp)"
+                placeholder="Test CLI / App Name (e.g. Apple, WhatsApp)"
+                className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-white placeholder-slate-500 text-xs font-mono focus:outline-none focus:border-sky-500"
+              />
+              <input
+                type="text"
+                value={testRange}
+                onChange={(e) => setTestRange(e.target.value)}
+                placeholder="Test Range Name (e.g. Guinea Orange, Tanzania)"
                 className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-white placeholder-slate-500 text-xs font-mono focus:outline-none focus:border-sky-500"
               />
               <textarea
                 value={testBody}
                 onChange={(e) => setTestBody(e.target.value)}
-                placeholder="Test SMS Message body (e.g. Your verification code is 123456)"
+                placeholder="Test SMS Message body (e.g. Your Apple ID verification code is 123456)"
                 rows={2}
                 className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-white placeholder-slate-500 text-xs focus:outline-none focus:border-sky-500 resize-none font-sans"
               />
@@ -432,136 +509,174 @@ export const ClientFilterView: React.FC = () => {
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 placeholder="Search filter rules by pattern or notes..."
-                className="w-full pl-9 pr-4 py-2 bg-slate-950 border border-slate-800 rounded-xl text-white placeholder-slate-500 text-xs focus:outline-none focus:border-amber-500 font-sans"
+                className="w-full pl-9 pr-4 py-2 bg-slate-950 border border-slate-800 rounded-xl text-white placeholder-slate-500 text-xs focus:outline-none focus:border-rose-500 font-sans"
               />
             </div>
 
-            <div className="flex items-center gap-1 bg-slate-950 p-1 rounded-xl border border-slate-800 self-end sm:self-auto">
+            <div className="flex items-center gap-1 bg-slate-950 p-1 rounded-xl border border-slate-800 self-end sm:self-auto flex-wrap">
               <button
                 type="button"
                 onClick={() => setFilterType('all')}
                 className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
                   filterType === 'all'
-                    ? 'bg-slate-800 text-amber-400 font-bold'
+                    ? 'bg-slate-800 text-rose-400 font-bold'
                     : 'text-slate-400 hover:text-white'
                 }`}
               >
                 All ({rules.length})
               </button>
+
               <button
                 type="button"
                 onClick={() => setFilterType('cli')}
                 className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
                   filterType === 'cli'
-                    ? 'bg-slate-800 text-sky-400 font-bold'
+                    ? 'bg-sky-500/20 text-sky-400 font-bold'
                     : 'text-slate-400 hover:text-white'
                 }`}
               >
                 CLI ({cliCount})
               </button>
+
               <button
                 type="button"
                 onClick={() => setFilterType('sms_body')}
                 className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
                   filterType === 'sms_body'
-                    ? 'bg-slate-800 text-purple-400 font-bold'
+                    ? 'bg-purple-500/20 text-purple-400 font-bold'
                     : 'text-slate-400 hover:text-white'
                 }`}
               >
-                SMS Body ({bodyCount})
+                Body ({bodyCount})
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setFilterType('range')}
+                className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                  filterType === 'range'
+                    ? 'bg-amber-500/20 text-amber-400 font-bold'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                Range ({rangeCount})
               </button>
             </div>
           </div>
 
-          {/* Rules List Cards */}
-          {displayedRules.length === 0 ? (
-            <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-10 text-center space-y-3">
-              <ShieldAlert className="w-10 h-10 text-slate-600 mx-auto" />
-              <p className="text-sm font-bold text-slate-300">No blacklist rules found</p>
-              <p className="text-xs text-slate-500 max-w-sm mx-auto">
-                {searchQuery
-                  ? 'No rules match your current search query.'
-                  : 'Add a CLI or SMS Body rule on the left to hide specific messages from client panels.'}
-              </p>
-            </div>
-          ) : (
-            <div className="space-y-2.5">
-              {displayedRules.map((rule) => (
-                <div
-                  key={rule.id}
-                  className={`bg-slate-900/90 border rounded-2xl p-4 shadow-lg transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-3.5 ${
-                    rule.enabled
-                      ? 'border-slate-800 hover:border-slate-700'
-                      : 'border-slate-800/50 opacity-60 bg-slate-950/40'
-                  }`}
-                >
-                  <div className="space-y-1.5 flex-1 min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span
-                        className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10.5px] font-bold border ${
-                          rule.type === 'cli'
-                            ? 'bg-sky-950/80 text-sky-400 border-sky-500/30'
-                            : 'bg-purple-950/80 text-purple-400 border-purple-500/30'
-                        }`}
-                      >
-                        {rule.type === 'cli' ? <Phone className="w-3 h-3" /> : <FileText className="w-3 h-3" />}
-                        <span>{rule.type === 'cli' ? 'CLI Rule' : 'SMS Body Rule'}</span>
-                      </span>
-
-                      <span className="px-2 py-0.5 rounded-md bg-slate-950 border border-slate-800 text-[10.5px] text-slate-400 font-mono">
-                        {rule.matchType === 'exact' ? 'Exact Match' : rule.matchType === 'starts_with' ? 'Starts With' : 'Contains'}
-                      </span>
-
-                      {!rule.enabled && (
-                        <span className="px-2 py-0.5 rounded-md bg-slate-800 text-[10px] text-slate-400 font-bold uppercase tracking-wider">
-                          Paused
-                        </span>
-                      )}
-                    </div>
-
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm font-mono font-bold text-white bg-slate-950 px-2.5 py-1 rounded-lg border border-slate-800 break-all select-all">
-                        {rule.pattern}
-                      </span>
-                    </div>
-
-                    {rule.notes && (
-                      <p className="text-xs text-slate-400 flex items-center gap-1.5">
-                        <Info className="w-3 h-3 text-slate-500 shrink-0" />
-                        <span>{rule.notes}</span>
-                      </p>
-                    )}
-                  </div>
-
-                  {/* Right Actions: Toggle & Delete */}
-                  <div className="flex items-center gap-2 self-end sm:self-center shrink-0 pt-2 sm:pt-0 border-t sm:border-t-0 border-slate-800/80 w-full sm:w-auto justify-end">
-                    <button
-                      type="button"
-                      onClick={() => handleToggle(rule.id)}
-                      className={`px-3 py-1.5 rounded-xl border text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer ${
-                        rule.enabled
-                          ? 'bg-emerald-950/60 border-emerald-500/30 text-emerald-400 hover:bg-emerald-950'
-                          : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-white'
-                      }`}
-                      title={rule.enabled ? 'Click to Pause Rule' : 'Click to Activate Rule'}
-                    >
-                      <Power className="w-3.5 h-3.5" />
-                      <span>{rule.enabled ? 'Active' : 'Disabled'}</span>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => handleDelete(rule.id)}
-                      className="p-2 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-400 hover:bg-rose-500/20 transition-all cursor-pointer"
-                      title="Delete Rule"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                  </div>
+          {/* Rules List Container */}
+          <div className="bg-slate-900/90 border border-slate-800 rounded-2xl shadow-xl overflow-hidden">
+            {displayedRules.length === 0 ? (
+              <div className="p-8 text-center space-y-3">
+                <div className="w-12 h-12 rounded-2xl bg-slate-800 border border-slate-700 mx-auto flex items-center justify-center text-slate-500">
+                  <ShieldAlert className="w-6 h-6" />
                 </div>
-              ))}
-            </div>
-          )}
+                <div className="space-y-1">
+                  <p className="text-sm font-bold text-white">No Blacklist Rules Configured</p>
+                  <p className="text-xs text-slate-400 max-w-sm mx-auto">
+                    Add a rule using the form on the left to block specific CLIs, App names, Range names, or SMS text from appearing in client consoles.
+                  </p>
+                </div>
+              </div>
+            ) : (
+              <div className="divide-y divide-slate-800/80">
+                {displayedRules.map((rule) => (
+                  <div
+                    key={rule.id}
+                    className={`p-4 flex items-center justify-between gap-4 transition-colors ${
+                      rule.enabled ? 'hover:bg-slate-850/50' : 'bg-slate-950/40 opacity-60'
+                    }`}
+                  >
+                    <div className="flex items-start gap-3 min-w-0">
+                      <div className="mt-0.5">
+                        {rule.type === 'cli' && (
+                          <div className="w-8 h-8 rounded-lg bg-sky-500/10 border border-sky-500/30 flex items-center justify-center text-sky-400">
+                            <Phone className="w-4 h-4" />
+                          </div>
+                        )}
+                        {rule.type === 'sms_body' && (
+                          <div className="w-8 h-8 rounded-lg bg-purple-500/10 border border-purple-500/30 flex items-center justify-center text-purple-400">
+                            <FileText className="w-4 h-4" />
+                          </div>
+                        )}
+                        {rule.type === 'range' && (
+                          <div className="w-8 h-8 rounded-lg bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-400">
+                            <Layers className="w-4 h-4" />
+                          </div>
+                        )}
+                        {rule.type === 'all' && (
+                          <div className="w-8 h-8 rounded-lg bg-rose-500/10 border border-rose-500/30 flex items-center justify-center text-rose-400">
+                            <Globe className="w-4 h-4" />
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="space-y-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="font-mono text-sm font-bold text-white bg-slate-950 px-2.5 py-0.5 rounded-lg border border-slate-800 break-all">
+                            {rule.pattern}
+                          </span>
+
+                          <span className="text-[10px] font-mono uppercase px-2 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-700">
+                            {rule.matchType || 'contains'}
+                          </span>
+
+                          <span
+                            className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
+                              rule.type === 'cli'
+                                ? 'bg-sky-500/10 text-sky-400 border-sky-500/30'
+                                : rule.type === 'sms_body'
+                                ? 'bg-purple-500/10 text-purple-400 border-purple-500/30'
+                                : rule.type === 'range'
+                                ? 'bg-amber-500/10 text-amber-400 border-amber-500/30'
+                                : 'bg-rose-500/10 text-rose-400 border-rose-500/30'
+                            }`}
+                          >
+                            {rule.type === 'cli' ? 'CLI / APP' : rule.type === 'sms_body' ? 'SMS BODY' : rule.type === 'range' ? 'RANGE' : 'ALL FIELDS'}
+                          </span>
+                        </div>
+
+                        {rule.notes && (
+                          <p className="text-xs text-slate-400 italic">
+                            "{rule.notes}"
+                          </p>
+                        )}
+
+                        <div className="text-[11px] text-slate-500 font-mono">
+                          Added: {new Date(rule.createdAt).toLocaleDateString()}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => handleToggle(rule.id)}
+                        className={`p-2 rounded-xl border text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer ${
+                          rule.enabled
+                            ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/20'
+                            : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-white'
+                        }`}
+                        title={rule.enabled ? 'Disable Rule' : 'Enable Rule'}
+                      >
+                        <Power className="w-3.5 h-3.5" />
+                        <span className="hidden sm:inline">{rule.enabled ? 'Active' : 'Disabled'}</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => handleDelete(rule.id)}
+                        className="p-2 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-400 hover:bg-rose-500/20 hover:text-rose-300 transition-colors cursor-pointer"
+                        title="Delete Rule"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       </div>
     </div>

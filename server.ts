@@ -214,6 +214,9 @@ function requireAuth(req: AuthRequest, res: Response, next: NextFunction) {
   }
 
   req.session = session;
+  if (session.role === 'client' && session.userId) {
+    store.recordClientActivity(session.userId, getClientIp(req));
+  }
   next();
 }
 
@@ -225,6 +228,14 @@ function requireAdmin(req: AuthRequest, res: Response, next: NextFunction) {
     next();
   });
 }
+
+// Client Activity / Ping Endpoint (Tracks panel open counts and live presence)
+app.post('/api/client/activity', requireAuth, (req: AuthRequest, res: Response) => {
+  if (req.session && req.session.role === 'client' && req.session.userId) {
+    store.recordClientPanelOpen(req.session.userId, getClientIp(req));
+  }
+  res.json({ success: true });
+});
 
 // ==========================================
 // 1. AUTHENTICATION & SESSION ENDPOINTS
@@ -307,6 +318,7 @@ const sseClients = new Set<SSEClient>();
 
 function broadcastNewMessage(message: any) {
   if (!message) return;
+
   const eventData = JSON.stringify(message);
 
   for (const client of sseClients) {
@@ -318,8 +330,8 @@ function broadcastNewMessage(message: any) {
         if (!allowed) continue;
       }
 
-      // 2. Client block rule check
-      if (client.role === 'client' && message.isClientBlocked) {
+      // 2. Client blacklist block rule check (Real-time dynamic verification)
+      if (client.role === 'client' && (message.isClientBlocked || store.isMessageBlockedForClients(message))) {
         continue;
       }
 
@@ -353,6 +365,11 @@ function broadcastNewMessage(message: any) {
 // Hook store.onNewMessage to SSE broadcaster
 store.onNewMessage((msg) => {
   broadcastNewMessage(msg);
+});
+
+// Hook store.onFilterRuleChanged to refresh connected client feeds immediately
+store.onFilterRuleChanged(() => {
+  broadcastClearEvent('client');
 });
 
 function broadcastClearEvent(target: 'client' | 'admin' | 'all', part?: string) {
@@ -1492,6 +1509,9 @@ app.put('/api/settings', requireAdmin, (req: AuthRequest, res: Response) => {
   }
   if (body.maxSmsRetention !== undefined) {
     sanitizedSettings.maxSmsRetention = Math.max(100, Math.min(50000, Number(body.maxSmsRetention) || 2000));
+  }
+  if (body.clientMaxRetention !== undefined) {
+    sanitizedSettings.clientMaxRetention = Math.max(10, Math.min(50000, Number(body.clientMaxRetention) || 1000));
   }
   if (body.smsTableBgColor !== undefined) sanitizedSettings.smsTableBgColor = sanitizeInputString(body.smsTableBgColor, 32);
   if (body.smsTextColor !== undefined) sanitizedSettings.smsTextColor = sanitizeInputString(body.smsTextColor, 32);

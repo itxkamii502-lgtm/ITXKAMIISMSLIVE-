@@ -1033,6 +1033,11 @@ export const LiveSMSView: React.FC = () => {
                         <span className="inline-flex items-center px-2.5 py-1 rounded-md text-xs font-black bg-sky-950/90 text-sky-300 border border-sky-500/40 font-mono tracking-wider shadow-sm">
                           <span className="font-extrabold">{cliName}</span>
                         </span>
+                        {msg.isClientBlocked && (
+                          <span className="px-1.5 py-0.5 rounded text-[9.5px] font-bold bg-rose-500/20 text-rose-300 border border-rose-500/40 font-mono">
+                            Blocked for Client
+                          </span>
+                        )}
                       </div>
                       <div className="text-[10px] font-mono text-slate-400 flex items-center gap-1">
                         <Clock className="w-3.5 h-3.5 text-slate-500" />
@@ -1230,9 +1235,16 @@ export const LiveSMSView: React.FC = () => {
                             zoomMode === 'ultra' ? 'py-2.5 px-2.5' : 'py-3.5 px-3.5'
                           } whitespace-nowrap border-r border-slate-800/70`}
                         >
-                          <span className="inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-black bg-sky-950/80 text-sky-300 border border-sky-500/50 font-mono shadow-sm tracking-wider">
-                            <span className="truncate max-w-[130px] font-extrabold">{cliName}</span>
-                          </span>
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span className="inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-black bg-sky-950/80 text-sky-300 border border-sky-500/50 font-mono shadow-sm tracking-wider">
+                              <span className="truncate max-w-[130px] font-extrabold">{cliName}</span>
+                            </span>
+                            {msg.isClientBlocked && (
+                              <span className="px-1.5 py-0.5 rounded text-[9.5px] font-bold bg-rose-500/20 text-rose-300 border border-rose-500/40 font-mono" title="100% blocked and hidden from client panels">
+                                Blocked for Client
+                              </span>
+                            )}
+                          </div>
                         </td>
 
                         {/* COLUMN 5: SMS */}

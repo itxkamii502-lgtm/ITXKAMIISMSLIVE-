@@ -450,6 +450,7 @@ class Store {
   private messages: SmsMessage[] = [];
   private clientFilterRules: Map<string, ClientFilterRule> = new Map();
   private newMessageListeners: ((msg: SmsMessage) => void)[] = [];
+  private filterRuleChangedListeners: (() => void)[] = [];
 
   // Persistent cumulative counter that NEVER resets when logs are cleared
   private cumulativeTotalSms: number = 0;
@@ -751,6 +752,9 @@ class Store {
           };
           this.sessions.set(token, session);
           client.lastActive = now;
+          client.lastLoginAt = now;
+          client.panelOpenCount = (client.panelOpenCount || 0) + 1;
+          this.scheduleSave();
           return { session };
         } else {
           return { error: 'Incorrect username or password' };
@@ -782,9 +786,31 @@ class Store {
         this.sessions.delete(token);
         return null;
       }
+      // Keep lastActive fresh
+      client.lastActive = Date.now();
     }
 
     return session;
+  }
+
+  public recordClientPanelOpen(clientId: string, ip?: string): void {
+    const client = this.clients.get(clientId);
+    if (client) {
+      const now = Date.now();
+      client.lastActive = now;
+      client.lastLoginAt = client.lastLoginAt || now;
+      client.panelOpenCount = (client.panelOpenCount || 0) + 1;
+      if (ip) client.lastIp = ip;
+      this.scheduleSave();
+    }
+  }
+
+  public recordClientActivity(clientId: string, ip?: string): void {
+    const client = this.clients.get(clientId);
+    if (client) {
+      client.lastActive = Date.now();
+      if (ip) client.lastIp = ip;
+    }
   }
 
   public logout(token: string): boolean {
@@ -1948,38 +1974,122 @@ class Store {
     return msg;
   }
 
-  // --- Client Filtering Logic (Hide specific CLIs or SMS body text from Client Panel) ---
+  public onFilterRuleChanged(listener: () => void) {
+    this.filterRuleChangedListeners.push(listener);
+  }
+
+  private notifyFilterRulesChanged() {
+    for (const fn of this.filterRuleChangedListeners) {
+      try {
+        fn();
+      } catch (e) {
+        console.error('Error in filter rule changed listener:', e);
+      }
+    }
+  }
+
+  // --- Client Filtering Logic (Hide specific CLIs, Range names, App names, or SMS body text from Client Panel) ---
   public isMessageBlockedForClients(msg: SmsMessage): boolean {
+    if (!msg) return false;
     const rules = Array.from(this.clientFilterRules.values()).filter(r => r.enabled);
     if (rules.length === 0) return false;
 
-    const cliLower = (msg.cli || msg.service || msg.sender || '').toLowerCase().trim();
-    const phoneClean = (msg.phone || '').toLowerCase().trim();
+    const cliStr = (msg.cli || '').toLowerCase().trim();
+    const senderStr = (msg.sender || '').toLowerCase().trim();
+    const serviceStr = (msg.service || '').toLowerCase().trim();
+    const phoneClean = (msg.phone || '').toLowerCase().replace(/[^0-9]/g, '');
+    const phoneRaw = (msg.phone || '').toLowerCase().trim();
     const bodyLower = (msg.message || '').toLowerCase().trim();
+    const otpLower = (msg.otp || '').toLowerCase().trim();
+    const rangeStr = (msg.rangeName || '').toLowerCase().trim();
+    const countryStr = (msg.country || '').toLowerCase().trim();
+    const matchedRangeObj = this.findRangeForPhone(msg.phone, msg.country);
+    const resolvedRangeName = (matchedRangeObj?.name || '').toLowerCase().trim();
+    const rangePrefix = (matchedRangeObj?.prefix || '').toLowerCase().trim();
 
     for (const rule of rules) {
-      const pattern = (rule.pattern || '').toLowerCase().trim();
-      if (!pattern) continue;
+      const rawPattern = (rule.pattern || '').trim();
+      if (!rawPattern) continue;
+
+      // Split comma-separated patterns so admin can enter e.g. "Apple, Google, Facebook"
+      const subPatterns = rawPattern.includes(',')
+        ? rawPattern.split(',').map(p => p.toLowerCase().trim()).filter(Boolean)
+        : [rawPattern.toLowerCase().trim()];
 
       const matchType = rule.matchType || 'contains';
 
-      if (rule.type === 'cli') {
-        if (matchType === 'exact') {
-          if (cliLower === pattern || phoneClean === pattern) return true;
-        } else if (matchType === 'starts_with') {
-          if (cliLower.startsWith(pattern) || phoneClean.startsWith(pattern)) return true;
+      for (const pattern of subPatterns) {
+        if (!pattern) continue;
+
+        const checkMatch = (val: string): boolean => {
+          if (!val) return false;
+          const clean = val.toLowerCase().trim();
+          if (matchType === 'exact') return clean === pattern;
+          if (matchType === 'starts_with') return clean.startsWith(pattern);
+          return clean.includes(pattern);
+        };
+
+        if (rule.type === 'cli') {
+          // Matches CLI, Sender ID, Service/App Name, or Phone
+          if (
+            checkMatch(cliStr) ||
+            checkMatch(senderStr) ||
+            checkMatch(serviceStr) ||
+            checkMatch(phoneClean) ||
+            checkMatch(phoneRaw)
+          ) {
+            return true;
+          }
+        } else if (rule.type === 'sms_body') {
+          // Matches SMS Body, OTP
+          if (
+            checkMatch(bodyLower) ||
+            checkMatch(otpLower)
+          ) {
+            return true;
+          }
+        } else if (rule.type === 'range') {
+          // Matches Range name, Country, resolved range name, prefix, or phone prefix
+          const digitOnlyPattern = pattern.replace(/[^0-9]/g, '');
+          if (
+            checkMatch(rangeStr) ||
+            checkMatch(countryStr) ||
+            checkMatch(resolvedRangeName) ||
+            (rangePrefix && checkMatch(rangePrefix)) ||
+            (digitOnlyPattern.length >= 2 && phoneClean.startsWith(digitOnlyPattern))
+          ) {
+            return true;
+          }
+          // Also check if any configured range whose name matches this pattern contains the message's phone
+          for (const rng of this.ranges.values()) {
+            const rngName = (rng.name || '').toLowerCase().trim();
+            if (rngName && (rngName.includes(pattern) || pattern.includes(rngName))) {
+              if (Array.isArray(rng.numbers) && phoneClean) {
+                if (rng.numbers.some(n => this.normalizePhoneDigits(n) === phoneClean)) {
+                  return true;
+                }
+              }
+            }
+          }
         } else {
-          // contains
-          if (cliLower.includes(pattern) || phoneClean.includes(pattern)) return true;
-        }
-      } else if (rule.type === 'sms_body') {
-        if (matchType === 'exact') {
-          if (bodyLower === pattern) return true;
-        } else if (matchType === 'starts_with') {
-          if (bodyLower.startsWith(pattern)) return true;
-        } else {
-          // contains
-          if (bodyLower.includes(pattern)) return true;
+          // 'all' / Global keyword blacklist (any field: App name, CLI, Sender, Body, OTP, Range, Country, Phone)
+          const digitOnlyPattern = pattern.replace(/[^0-9]/g, '');
+          if (
+            checkMatch(cliStr) ||
+            checkMatch(senderStr) ||
+            checkMatch(serviceStr) ||
+            checkMatch(bodyLower) ||
+            checkMatch(otpLower) ||
+            checkMatch(rangeStr) ||
+            checkMatch(countryStr) ||
+            checkMatch(resolvedRangeName) ||
+            (rangePrefix && checkMatch(rangePrefix)) ||
+            (digitOnlyPattern.length >= 2 && phoneClean.startsWith(digitOnlyPattern)) ||
+            checkMatch(phoneClean) ||
+            checkMatch(phoneRaw)
+          ) {
+            return true;
+          }
         }
       }
     }
@@ -1992,14 +2102,14 @@ class Store {
   }
 
   public addClientFilterRule(data: {
-    type: 'cli' | 'sms_body';
+    type: 'cli' | 'sms_body' | 'range' | 'all';
     pattern: string;
     matchType?: 'exact' | 'contains' | 'starts_with';
     notes?: string;
   }): { rule?: ClientFilterRule; error?: string } {
     const pattern = (data.pattern || '').trim();
     if (!pattern) {
-      return { error: 'CLI or SMS body pattern is required' };
+      return { error: 'Filter pattern or keyword is required' };
     }
 
     const id = 'cfr_' + generateToken().slice(0, 10);
@@ -2021,6 +2131,7 @@ class Store {
     }
 
     this.scheduleSave();
+    this.notifyFilterRulesChanged();
     return { rule };
   }
 
@@ -2034,6 +2145,7 @@ class Store {
       m.isClientBlocked = this.isMessageBlockedForClients(m);
     }
     this.scheduleSave();
+    this.notifyFilterRulesChanged();
     return true;
   }
 
@@ -2044,6 +2156,7 @@ class Store {
         m.isClientBlocked = this.isMessageBlockedForClients(m);
       }
       this.scheduleSave();
+      this.notifyFilterRulesChanged();
     }
     return deleted;
   }
@@ -2421,12 +2534,14 @@ class Store {
       }
     }
 
-    // CLI contains filter
+    // CLI or keyword contains filter (Matches CLI, Sender, Service, SMS Body, or Phone)
     if (params.cli && params.cli.trim() !== '') {
       const cleanCli = params.cli.toLowerCase().trim();
       list = list.filter(m => {
         const cliStr = (m.cli || m.service || m.sender || '').toLowerCase();
-        return cliStr.includes(cleanCli);
+        const bodyStr = (m.message || '').toLowerCase();
+        const phoneStr = (m.phone || '').toLowerCase();
+        return cliStr.includes(cleanCli) || bodyStr.includes(cleanCli) || phoneStr.includes(cleanCli);
       });
     }
 

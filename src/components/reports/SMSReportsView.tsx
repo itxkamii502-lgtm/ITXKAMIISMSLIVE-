@@ -232,7 +232,9 @@ export const SMSReportsView: React.FC<SMSReportsViewProps> = ({ embeddedInClient
           setIsGroupedMode(true);
           setAppliedGroupFields(activeGroups);
         } else {
-          const newMsgs: SmsMessage[] = data.messages || [];
+          const rawMsgs: SmsMessage[] = data.messages || [];
+          const isClientUser = session?.role === 'client' || embeddedInClient;
+          const newMsgs = isClientUser ? rawMsgs.filter((m) => !m.isClientBlocked) : rawMsgs;
           setMessages(newMsgs);
           setGroups([]);
           setIsGroupedMode(false);
@@ -667,14 +669,23 @@ export const SMSReportsView: React.FC<SMSReportsViewProps> = ({ embeddedInClient
               </div>
 
               <div>
-                <label className="block text-xs font-serif text-slate-500 mb-1">
-                  CLI
+                <label className="block text-xs font-serif text-slate-500 mb-1 flex items-center justify-between">
+                  <span>CLI / App Keyword</span>
+                  {cliFilter && (
+                    <button
+                      type="button"
+                      onClick={() => setCliFilter('')}
+                      className="text-[10px] text-blue-600 hover:underline cursor-pointer"
+                    >
+                      Clear
+                    </button>
+                  )}
                 </label>
                 <input
                   type="text"
                   value={cliFilter}
                   onChange={(e) => setCliFilter(e.target.value)}
-                  placeholder="CLI contains..."
+                  placeholder="CLI, app name, or SMS keyword (e.g. Apple)..."
                   className="w-full px-3.5 py-2.5 bg-white border border-slate-200 rounded-xl text-xs sm:text-sm text-slate-800 placeholder-slate-400 font-sans shadow-2xs focus:outline-none focus:border-blue-500 transition-colors"
                 />
               </div>
@@ -1016,9 +1027,16 @@ export const SMSReportsView: React.FC<SMSReportsViewProps> = ({ embeddedInClient
                         )}
                         {visibleColumns.cli && (
                           <td className="py-3 px-3.5 whitespace-nowrap border-r border-slate-100">
-                            <span className="px-2 py-0.5 rounded bg-indigo-50 text-indigo-700 font-bold border border-indigo-200 text-[11px] font-mono">
-                              {cliName}
-                            </span>
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <span className="px-2 py-0.5 rounded bg-indigo-50 text-indigo-700 font-bold border border-indigo-200 text-[11px] font-mono">
+                                {cliName}
+                              </span>
+                              {msg.isClientBlocked && session?.role === 'admin' && (
+                                <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-rose-50 text-rose-700 border border-rose-200" title="Hidden from client panels by blacklist">
+                                  Blocked for Client
+                                </span>
+                              )}
+                            </div>
                           </td>
                         )}
                         {visibleColumns.sms && (

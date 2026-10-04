@@ -25,6 +25,19 @@ import { useAuth } from '../../context/AuthContext';
 import { THEMES } from '../../utils/theme';
 import type { ClientAccount } from '../../types';
 
+function formatLastSeen(timestamp?: number): { relative: string; full: string; isRecent: boolean } {
+  if (!timestamp) return { relative: 'Never', full: 'No activity recorded', isRecent: false };
+  const diffSec = Math.max(0, Math.floor((Date.now() - timestamp) / 1000));
+  if (diffSec < 15) return { relative: 'Active now', full: new Date(timestamp).toLocaleString(), isRecent: true };
+  if (diffSec < 60) return { relative: `${diffSec}s ago`, full: new Date(timestamp).toLocaleString(), isRecent: true };
+  const diffMin = Math.floor(diffSec / 60);
+  if (diffMin < 60) return { relative: `${diffMin}m ago`, full: new Date(timestamp).toLocaleString(), isRecent: diffMin < 10 };
+  const diffHr = Math.floor(diffMin / 60);
+  if (diffHr < 24) return { relative: `${diffHr}h ago`, full: new Date(timestamp).toLocaleString(), isRecent: false };
+  const diffDays = Math.floor(diffHr / 24);
+  return { relative: `${diffDays}d ago`, full: new Date(timestamp).toLocaleString(), isRecent: false };
+}
+
 export const ClientsView: React.FC = () => {
   const { session, settings } = useAuth();
   const theme = settings?.theme ? THEMES[settings.theme] : THEMES.emerald;
@@ -317,6 +330,7 @@ export const ClientsView: React.FC = () => {
                   <th className="py-3 px-4">Password</th>
                   <th className="py-3 px-4">Allowed Services</th>
                   <th className="py-3 px-4">Status & Sessions</th>
+                  <th className="py-3 px-4">Last Active & Panel Opens</th>
                   <th className="py-3 px-4">Created Date</th>
                   <th className="py-3 px-4 text-right">Actions</th>
                 </tr>
@@ -456,6 +470,59 @@ export const ClientsView: React.FC = () => {
                                     <span>Disconnect all users</span>
                                   </button>
                                 </div>
+                              )}
+                            </div>
+                          );
+                        })()}
+                      </td>
+
+                      {/* Last Active & Panel Opens */}
+                      <td className="py-3.5 px-4">
+                        {(() => {
+                          const lastActive = formatLastSeen(c.lastActive);
+                          const openCount = c.panelOpenCount || 0;
+
+                          return (
+                            <div className="space-y-1">
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                <span
+                                  className={`w-2 h-2 rounded-full shrink-0 ${
+                                    lastActive.isRecent
+                                      ? 'bg-emerald-400 animate-ping'
+                                      : c.lastActive
+                                      ? 'bg-emerald-400'
+                                      : 'bg-slate-600'
+                                  }`}
+                                />
+                                <span
+                                  className={`text-xs font-mono font-bold ${
+                                    lastActive.isRecent
+                                      ? 'text-emerald-300'
+                                      : c.lastActive
+                                      ? 'text-slate-200'
+                                      : 'text-slate-500'
+                                  }`}
+                                  title={lastActive.full}
+                                >
+                                  {lastActive.relative}
+                                </span>
+                                <span
+                                  className="px-1.5 py-0.2 rounded bg-indigo-500/15 border border-indigo-500/30 text-indigo-300 text-[10px] font-mono font-bold"
+                                  title="Total times this client opened the panel"
+                                >
+                                  {openCount} {openCount === 1 ? 'open' : 'opens'}
+                                </span>
+                              </div>
+                              {c.lastActive ? (
+                                <div className="text-[10px] text-slate-400 font-mono flex items-center gap-1">
+                                  <Clock className="w-2.5 h-2.5 text-slate-500 shrink-0" />
+                                  <span>
+                                    {new Date(c.lastActive).toLocaleDateString([], { month: 'short', day: 'numeric' })} at{' '}
+                                    {new Date(c.lastActive).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                                  </span>
+                                </div>
+                              ) : (
+                                <span className="text-[10px] text-slate-500 font-mono">No sessions yet</span>
                               )}
                             </div>
                           );
