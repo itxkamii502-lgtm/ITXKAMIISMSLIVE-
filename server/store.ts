@@ -564,6 +564,17 @@ class Store {
       }
       if (Array.isArray(data.messages)) {
         this.messages = data.messages;
+        for (const m of this.messages) {
+          const detC = getCountryByPhonePrefix(m.phone);
+          const trueCountry = (detC && detC !== 'Worldwide') ? detC : (m.country || 'Worldwide');
+          m.country = trueCountry;
+          const matched = this.findRangeForPhone(m.phone, trueCountry);
+          if (matched) {
+            m.rangeName = matched.name;
+          } else {
+            m.rangeName = trueCountry;
+          }
+        }
       }
       if (typeof data.cumulativeTotalSms === 'number') {
         this.cumulativeTotalSms = Math.max(data.cumulativeTotalSms, this.messages.length);
@@ -635,6 +646,8 @@ class Store {
     error?: string;
     isLocked?: boolean;
     lockedUntil?: number;
+    isInactive3Days?: boolean;
+    deactivatedReason?: string;
   } {
     const cleanUser = (username || '').trim();
     const cleanPass = (password || '').trim();
@@ -702,7 +715,28 @@ class Store {
           client.lockReason = undefined;
         }
 
+        // 3-Day Inactivity Auto-Deactivation Policy:
+        // Rule: If a client has not opened the panel or been active for 3 days, auto-deactivate!
+        const THREE_DAYS_MS = 3 * 24 * 60 * 60 * 1000;
+        const lastActivityTime = client.lastActive || client.lastLoginAt || client.createdAt || 0;
+        const isInactive3Days = client.status === 'active' && (now - lastActivityTime) > THREE_DAYS_MS;
+
+        if (isInactive3Days) {
+          client.status = 'inactive';
+          client.deactivatedReason = 'inactive_3_days';
+          client.deactivatedAt = now;
+          this.scheduleSave();
+        }
+
         if (client.status !== 'active') {
+          const wasInactive3Days = client.deactivatedReason === 'inactive_3_days' || isInactive3Days || (lastActivityTime > 0 && (now - lastActivityTime) > THREE_DAYS_MS);
+          if (wasInactive3Days) {
+            return {
+              error: 'Your account has been automatically deactivated due to 3 days of inactivity. Please contact your Administrator to reactivate your access.',
+              isInactive3Days: true,
+              deactivatedReason: 'inactive_3_days',
+            };
+          }
           return { error: 'Your client account is inactive or has been suspended. Contact administrator.' };
         }
 
@@ -843,6 +877,15 @@ class Store {
         c.lockedUntil = undefined;
         c.lockReason = undefined;
       }
+
+      // 3-Day Inactivity Auto-Deactivation Policy:
+      const THREE_DAYS_MS = 3 * 24 * 60 * 60 * 1000;
+      const lastActivityTime = c.lastActive || c.lastLoginAt || c.createdAt || 0;
+      if (c.status === 'active' && lastActivityTime > 0 && (now - lastActivityTime) > THREE_DAYS_MS) {
+        c.status = 'inactive';
+        c.deactivatedReason = 'inactive_3_days';
+        c.deactivatedAt = now;
+      }
       return {
         ...c,
         maxConcurrentSessions: c.maxConcurrentSessions || 3,
@@ -948,6 +991,10 @@ class Store {
       client.status = data.status;
       if (client.status === 'inactive') {
         this.destroyClientSessions(id);
+      } else if (client.status === 'active') {
+        client.deactivatedReason = undefined;
+        client.deactivatedAt = undefined;
+        client.lastActive = Date.now();
       }
     }
 
@@ -1283,16 +1330,22 @@ class Store {
         }
         seenInBatch.add(digits);
 
-        const check = this.isNumberInAnyRange(digits, targetRangeId);
+        const check = this.isNumberInAnyRange(digits);
         if (check.exists) {
-          duplicateCount++;
+          const isCurrent = Boolean(targetRangeId && check.rangeId === targetRangeId);
+          if (isCurrent) {
+            duplicateCount++;
+          } else {
+            // Number belongs to another range and will be moved to this target range
+            newCount++;
+            uniqueNumbers.push(digits);
+          }
           if (duplicates.length < 60) {
-            const isCurrent = Boolean(targetRangeId && check.rangeId === targetRangeId);
             duplicates.push({
               number: digits,
               reason: isCurrent 
-                ? `Already exists in this range ("${check.rangeName}")`
-                : `Already assigned to range "${check.rangeName}"`,
+                ? `Already in this range ("${check.rangeName}")`
+                : `Will be moved from "${check.rangeName}" to this range`,
               isCurrentRange: isCurrent,
               rangeName: check.rangeName,
             });
@@ -1330,8 +1383,8 @@ class Store {
     const rangesModified: { id: string; name: string; prefix: string; beforeCount: number; afterCount: number; removedCount: number }[] = [];
     const sampleDuplicates: { number: string; keptInRange: string; removedFromRange: string }[] = [];
 
-    // Sort ranges by createdAt ascending so the earliest range that owned the number keeps it
-    const sortedRanges = Array.from(this.ranges.values()).sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+    // Sort ranges by updatedAt descending so the MOST RECENT range that the admin assigned the numbers to keeps it!
+    const sortedRanges = Array.from(this.ranges.values()).sort((a, b) => (b.updatedAt || b.createdAt || 0) - (a.updatedAt || a.createdAt || 0));
 
     for (const range of sortedRanges) {
       const beforeCount = range.numbers.length;
@@ -1454,53 +1507,21 @@ class Store {
       }
     }
 
-    // 4. Suffix matching (last 8-9 digits) for telecom numbers
+    // 4. Suffix matching (last 8-9 digits) for telecom numbers only against actual range numbers
     if (digits.length >= 8) {
       const suffix8 = digits.slice(-8);
       for (const range of this.ranges.values()) {
-        const found = range.numbers.find(n => n.endsWith(suffix8));
-        if (found) {
-          return range;
+        if (range.numbers && range.numbers.length > 0) {
+          const found = range.numbers.find(n => n.endsWith(suffix8));
+          if (found) {
+            return range;
+          }
         }
       }
     }
 
-    // 5. Prefix matching (e.g. Guinea 224, Tanzania 255, Ukraine 380)
-    // Longest prefix match takes precedence
-    const matchingByPrefix: NumberRange[] = [];
-    for (const range of this.ranges.values()) {
-      const cleanPrefix = range.prefix.replace(/[^\d]/g, '');
-      if (cleanPrefix && digits.startsWith(cleanPrefix)) {
-        matchingByPrefix.push(range);
-      }
-    }
-
-    if (matchingByPrefix.length > 0) {
-      if (country) {
-        const cLower = country.toLowerCase();
-        const noteMatch = matchingByPrefix.find(r => 
-          (r.countryNote && r.countryNote.toLowerCase().includes(cLower)) ||
-          r.name.toLowerCase().includes(cLower)
-        );
-        if (noteMatch) return noteMatch;
-      }
-      matchingByPrefix.sort((a, b) => b.prefix.length - a.prefix.length);
-      return matchingByPrefix[0];
-    }
-
-    // 6. Country Note match fallback
-    if (country) {
-      const cLower = country.toLowerCase();
-      for (const range of this.ranges.values()) {
-        if (
-          (range.countryNote && range.countryNote.toLowerCase() === cLower) ||
-          range.name.toLowerCase().includes(cLower)
-        ) {
-          return range;
-        }
-      }
-    }
-
+    // If phone is not assigned to any custom range numbers, return null
+    // (Caller will resolve to the detected Country Name)
     return null;
   }
 
@@ -1526,6 +1547,7 @@ class Store {
     error?: string;
     addedCount: number;
     duplicateCount: number;
+    movedCount: number;
     conflictSample?: { number: string; reason: string }[];
   } {
     const cleanName = sanitizeInputString(data.name, 64);
@@ -1533,10 +1555,10 @@ class Store {
     const cleanNote = sanitizeInputString(data.countryNote, 64);
 
     if (!cleanName) {
-      return { success: false, error: 'Range Name is required', addedCount: 0, duplicateCount: 0 };
+      return { success: false, error: 'Range Name is required', addedCount: 0, duplicateCount: 0, movedCount: 0 };
     }
     if (!cleanPrefix) {
-      return { success: false, error: 'Country Prefix is required (e.g. 224, 255, 380)', addedCount: 0, duplicateCount: 0 };
+      return { success: false, error: 'Country Prefix is required (e.g. 224, 255, 380)', addedCount: 0, duplicateCount: 0, movedCount: 0 };
     }
 
     const id = `rng_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
@@ -1553,6 +1575,7 @@ class Store {
 
     let addedCount = 0;
     let duplicateCount = 0;
+    let movedCount = 0;
     const conflictSample: { number: string; reason: string }[] = [];
 
     if (data.numbers && Array.isArray(data.numbers)) {
@@ -1560,34 +1583,43 @@ class Store {
       for (const rawNum of data.numbers) {
         const digits = this.normalizePhoneDigits(String(rawNum));
         if (digits.length >= 5) {
-          // 1. Batch duplicate protection
+          // 1. Batch duplicate protection (skip duplicates inside current batch)
           if (seenInBatch.has(digits)) {
             duplicateCount++;
             continue;
           }
           seenInBatch.add(digits);
 
-          // 2. Strict GLOBAL Duplicate Protection: 1 Number = 1 Range Only!
+          // 2. Global check: If number was in another range, MOVE it to this new range
           const existingCheck = this.isNumberInAnyRange(digits);
           if (existingCheck.exists) {
-            duplicateCount++;
-            if (conflictSample.length < 10) {
-              conflictSample.push({
-                number: digits,
-                reason: `Already assigned to range "${existingCheck.rangeName}"`,
-              });
+            const oldRange = this.ranges.get(existingCheck.rangeId);
+            if (oldRange) {
+              oldRange.numbers = oldRange.numbers.filter(n => this.normalizePhoneDigits(n) !== digits);
+              oldRange.totalNumbers = oldRange.numbers.length;
+              oldRange.updatedAt = Date.now();
             }
-            continue;
+            movedCount++;
           }
 
-          newRange.numbers.push(digits);
+          if (!newRange.numbers.some(n => this.normalizePhoneDigits(n) === digits)) {
+            newRange.numbers.push(digits);
+          }
           this.phoneToRangeMap.set(digits, id);
           addedCount++;
+
+          // Update any historical messages for this phone to reflect new range
+          for (const msg of this.messages) {
+            if (this.normalizePhoneDigits(msg.phone) === digits) {
+              msg.rangeName = newRange.name;
+            }
+          }
         }
       }
     }
 
     newRange.totalNumbers = newRange.numbers.length;
+    newRange.updatedAt = Date.now();
     this.ranges.set(id, newRange);
     this.scheduleSave();
 
@@ -1596,6 +1628,7 @@ class Store {
       range: newRange,
       addedCount,
       duplicateCount,
+      movedCount,
       conflictSample,
     };
   }
@@ -1606,16 +1639,18 @@ class Store {
     error?: string;
     addedCount: number;
     duplicateCount: number;
+    movedCount: number;
     conflictSample?: { number: string; reason: string }[];
   } {
     const range = this.ranges.get(rangeId);
     if (!range) {
-      return { success: false, error: 'Range not found', addedCount: 0, duplicateCount: 0 };
+      return { success: false, error: 'Range not found', addedCount: 0, duplicateCount: 0, movedCount: 0 };
     }
 
     const seenInBatch = new Set<string>();
     let addedCount = 0;
     let duplicateCount = 0;
+    let movedCount = 0;
     const conflictSample: { number: string; reason: string }[] = [];
 
     for (const rawNum of numbers) {
@@ -1628,22 +1663,39 @@ class Store {
         }
         seenInBatch.add(digits);
 
-        // 2. Strict GLOBAL Duplicate Protection: 1 Number = 1 Range Only!
+        // 2. Global check: If already in THIS range, skip duplicate
         const existingCheck = this.isNumberInAnyRange(digits);
         if (existingCheck.exists) {
-          duplicateCount++;
-          if (conflictSample.length < 10) {
-            const reason = existingCheck.rangeId === rangeId
-              ? `Already exists in this range ("${range.name}")`
-              : `Already assigned to range "${existingCheck.rangeName}"`;
-            conflictSample.push({ number: digits, reason });
+          if (existingCheck.rangeId === rangeId) {
+            // Already in this same range, skip duplicate
+            duplicateCount++;
+            continue;
+          } else {
+            // Number belongs to ANOTHER range (e.g. added to wrong range by mistake).
+            // Move/Reassign the number to this target range!
+            const oldRange = this.ranges.get(existingCheck.rangeId);
+            if (oldRange) {
+              oldRange.numbers = oldRange.numbers.filter(n => this.normalizePhoneDigits(n) !== digits);
+              oldRange.totalNumbers = oldRange.numbers.length;
+              oldRange.updatedAt = Date.now();
+            }
+            movedCount++;
+            // Proceed to add to this target range
           }
-          continue;
         }
 
-        range.numbers.push(digits);
+        if (!range.numbers.some(n => this.normalizePhoneDigits(n) === digits)) {
+          range.numbers.push(digits);
+        }
         this.phoneToRangeMap.set(digits, range.id);
         addedCount++;
+
+        // Update historical messages for this phone to reflect newly assigned range
+        for (const msg of this.messages) {
+          if (this.normalizePhoneDigits(msg.phone) === digits) {
+            msg.rangeName = range.name;
+          }
+        }
       }
     }
 
@@ -1656,6 +1708,7 @@ class Store {
       range: { ...range },
       addedCount,
       duplicateCount,
+      movedCount,
       conflictSample,
     };
   }
@@ -1686,6 +1739,18 @@ class Store {
     const removedCount = originalLen - range.numbers.length;
     range.totalNumbers = range.numbers.length;
     range.updatedAt = Date.now();
+
+    // Reset rangeName on messages for removed numbers back to detected country name
+    for (const msg of this.messages) {
+      const cleanPhone = this.normalizePhoneDigits(msg.phone);
+      if (removeSet.has(cleanPhone)) {
+        const trueCountry = getCountryByPhonePrefix(msg.phone) || 'Worldwide';
+        msg.country = trueCountry;
+        const remainingRange = this.findRangeForPhone(msg.phone, trueCountry);
+        msg.rangeName = remainingRange ? remainingRange.name : trueCountry;
+      }
+    }
+
     this.scheduleSave();
 
     return {
@@ -1708,16 +1773,31 @@ class Store {
     }
 
     const removedCount = range.numbers.length;
+    const oldRangeName = range.name;
+
     // Unbind every number from global phoneToRangeMap
     for (const num of range.numbers) {
-      if (this.phoneToRangeMap.get(num) === rangeId) {
-        this.phoneToRangeMap.delete(num);
+      const clean = this.normalizePhoneDigits(num);
+      if (this.phoneToRangeMap.get(clean) === rangeId) {
+        this.phoneToRangeMap.delete(clean);
       }
     }
 
     range.numbers = [];
     range.totalNumbers = 0;
     range.updatedAt = Date.now();
+
+    // Reset rangeName and country on any messages that belonged to this cleared range
+    // so they display their accurate country name instead!
+    for (const msg of this.messages) {
+      if (msg.rangeName === oldRangeName || msg.country === oldRangeName) {
+        const trueCountry = getCountryByPhonePrefix(msg.phone) || 'Worldwide';
+        msg.country = trueCountry;
+        const remainingRange = this.findRangeForPhone(msg.phone, trueCountry);
+        msg.rangeName = remainingRange ? remainingRange.name : trueCountry;
+      }
+    }
+
     this.scheduleSave();
 
     return {
@@ -1731,14 +1811,28 @@ class Store {
     const range = this.ranges.get(rangeId);
     if (!range) return false;
 
+    const oldRangeName = range.name;
+
     for (const num of range.numbers) {
-      if (this.phoneToRangeMap.get(num) === rangeId) {
-        this.phoneToRangeMap.delete(num);
+      const clean = this.normalizePhoneDigits(num);
+      if (this.phoneToRangeMap.get(clean) === rangeId) {
+        this.phoneToRangeMap.delete(clean);
       }
     }
 
     const res = this.ranges.delete(rangeId);
-    if (res) this.scheduleSave();
+    if (res) {
+      // Reset rangeName and country on any messages that belonged to this deleted range
+      for (const msg of this.messages) {
+        if (msg.rangeName === oldRangeName || msg.country === oldRangeName) {
+          const trueCountry = getCountryByPhonePrefix(msg.phone) || 'Worldwide';
+          msg.country = trueCountry;
+          const remainingRange = this.findRangeForPhone(msg.phone, trueCountry);
+          msg.rangeName = remainingRange ? remainingRange.name : trueCountry;
+        }
+      }
+      this.scheduleSave();
+    }
     return res;
   }
 
@@ -1910,8 +2004,8 @@ class Store {
       phone: phone,
       sender: data.sender || cli,
       service: service,
-      country: resolvedRangeName || country,
-      rangeName: resolvedRangeName || country,
+      country: country || (detectedCountry !== 'Worldwide' ? detectedCountry : 'Worldwide'),
+      rangeName: resolvedRangeName || country || 'Direct',
       cli: cli,
       message: cleanMsg,
       otp: otp,
@@ -2521,7 +2615,9 @@ class Store {
     if (params.range && params.range.trim() !== '' && params.range.toLowerCase() !== 'all') {
       const target = params.range.toLowerCase().trim();
       list = list.filter(m => {
-        const resolved = (m.rangeName || this.findRangeForPhone(m.phone, m.country)?.name || m.country || '').toLowerCase();
+        const detC = getCountryByPhonePrefix(m.phone);
+        const trueC = (detC && detC !== 'Worldwide') ? detC : (m.country || '');
+        const resolved = (this.findRangeForPhone(m.phone, trueC)?.name || trueC).toLowerCase();
         return resolved === target || resolved.includes(target);
       });
     }
@@ -2549,7 +2645,9 @@ class Store {
     if (params.query && params.query.trim() !== '') {
       const q = params.query.toLowerCase().trim();
       list = list.filter(m => {
-        const rangeStr = (m.rangeName || this.findRangeForPhone(m.phone, m.country)?.name || m.country || '').toLowerCase();
+        const detC = getCountryByPhonePrefix(m.phone);
+        const trueC = (detC && detC !== 'Worldwide') ? detC : (m.country || '');
+        const rangeStr = (this.findRangeForPhone(m.phone, trueC)?.name || trueC).toLowerCase();
         return (
           (m.phone || '').includes(q) ||
           (m.cli || m.service || m.sender || '').toLowerCase().includes(q) ||
@@ -2579,7 +2677,10 @@ class Store {
         const dd = String(pktDate.getUTCDate()).padStart(2, '0');
         const hh = String(pktDate.getUTCHours()).padStart(2, '0');
 
-        const resolvedRange = m.rangeName || this.findRangeForPhone(m.phone, m.country)?.name || m.country || 'Direct';
+        const detectedC = getCountryByPhonePrefix(m.phone);
+        const trueCountry = (detectedC && detectedC !== 'Worldwide') ? detectedC : (m.country || 'Worldwide');
+        const matchedR = this.findRangeForPhone(m.phone, trueCountry);
+        const resolvedRange = matchedR ? matchedR.name : trueCountry;
         const cliName = (m.cli || m.service || m.sender || 'Direct').trim();
 
         const itemValues: Record<string, string> = {
@@ -2616,11 +2717,17 @@ class Store {
       };
     }
 
-    // Normal mode: attach resolved rangeName to each message
-    const resolvedMessages = list.slice(0, params.limit || 5000).map(m => ({
-      ...m,
-      rangeName: m.rangeName || this.findRangeForPhone(m.phone, m.country)?.name || m.country || 'Direct',
-    }));
+    // Normal mode: attach resolved rangeName & true country to each message dynamically
+    const resolvedMessages = list.slice(0, params.limit || 5000).map(m => {
+      const detectedC = getCountryByPhonePrefix(m.phone);
+      const trueCountry = (detectedC && detectedC !== 'Worldwide') ? detectedC : (m.country || 'Worldwide');
+      const matchedR = this.findRangeForPhone(m.phone, trueCountry);
+      return {
+        ...m,
+        country: trueCountry,
+        rangeName: matchedR ? matchedR.name : trueCountry,
+      };
+    });
 
     return {
       messages: resolvedMessages,

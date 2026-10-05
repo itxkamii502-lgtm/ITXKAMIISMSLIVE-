@@ -15,16 +15,16 @@ export interface ThemeConfig {
 
 export const THEMES: Record<ThemePreset, ThemeConfig> = {
   emerald: {
-    name: 'Emerald Cyber (Default)',
-    badgeClass: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30',
-    primaryBg: 'bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-semibold',
-    primaryHover: 'hover:bg-emerald-600',
+    name: 'White • Green • Blue Pro (Default)',
+    badgeClass: 'bg-blue-500/10 text-emerald-400 border-blue-500/30 ring-1 ring-emerald-500/20',
+    primaryBg: 'bg-gradient-to-r from-blue-600 via-blue-500 to-emerald-600 hover:from-blue-500 hover:via-blue-600 hover:to-emerald-500 text-white font-bold border border-white/10',
+    primaryHover: 'hover:from-blue-500 hover:to-emerald-500',
     primaryText: 'text-emerald-400',
-    accentBorder: 'border-emerald-500/30',
-    glowClass: 'shadow-[0_0_20px_rgba(16,185,129,0.15)]',
-    ringClass: 'focus:ring-emerald-500',
-    cardActiveBorder: 'border-emerald-500',
-    gradientText: 'from-emerald-400 to-teal-200',
+    accentBorder: 'border-blue-500/30',
+    glowClass: 'shadow-[0_0_25px_rgba(37,99,235,0.20)]',
+    ringClass: 'focus:ring-blue-500',
+    cardActiveBorder: 'border-blue-500',
+    gradientText: 'from-white via-emerald-300 to-blue-400',
   },
   cyan: {
     name: 'Electric Cyan',

@@ -112,7 +112,7 @@ export const AdminLayout: React.FC = () => {
   ] as const;
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col md:flex-row font-sans selection:bg-emerald-500 selection:text-black">
+    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col md:flex-row font-sans selection:bg-blue-600 selection:text-white">
       {/* Mobile Top Header with Menu Toggle */}
       <div className="md:hidden bg-slate-900/95 backdrop-blur-md border-b border-slate-800 px-3.5 py-2.5 flex items-center justify-between sticky top-0 z-40">
         <div className="flex items-center gap-2">
@@ -227,11 +227,11 @@ export const AdminLayout: React.FC = () => {
                     sidebarCollapsed ? 'justify-center px-2' : ''
                   } ${
                     isActive
-                      ? `${theme.primaryBg} shadow-lg scale-[1.02]`
-                      : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
+                      ? `${theme.primaryBg} shadow-lg shadow-blue-500/20 scale-[1.02]`
+                      : 'text-slate-300 hover:text-white hover:bg-slate-800/80'
                   }`}
                 >
-                  <Icon className={`w-4 h-4 shrink-0 ${isActive ? 'text-slate-950' : 'text-slate-400'}`} />
+                  <Icon className={`w-4 h-4 shrink-0 ${isActive ? 'text-white' : 'text-slate-400'}`} />
                   {!sidebarCollapsed && (
                     <div className="flex items-center justify-between flex-1 overflow-hidden">
                       <span className="tracking-wide truncate">{item.label}</span>

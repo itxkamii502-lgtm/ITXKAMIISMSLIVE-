@@ -317,7 +317,7 @@ export const SMSReportsView: React.FC<SMSReportsViewProps> = ({ embeddedInClient
       if (!tableSearch.trim()) return messages;
       const q = tableSearch.toLowerCase().trim();
       return messages.filter(m => {
-        const rName = m.rangeName || resolveRangeName(m.country, m.phone, ranges);
+        const rName = resolveRangeName(m.country, m.phone, ranges) || m.rangeName || 'Direct';
         return (
           (m.phone || '').toLowerCase().includes(q) ||
           (m.cli || m.service || m.sender || '').toLowerCase().includes(q) ||
@@ -359,7 +359,7 @@ export const SMSReportsView: React.FC<SMSReportsViewProps> = ({ embeddedInClient
     } else {
       const header = ['Date', 'Range', 'Number', 'CLI', 'SMS'].join('\t');
       const rows = (displayItems as SmsMessage[]).map(m => {
-        const rName = m.rangeName || resolveRangeName(m.country, m.phone, ranges);
+        const rName = resolveRangeName(m.country, m.phone, ranges) || m.rangeName || 'Direct';
         const cliName = m.cli || m.service || m.sender || 'Direct';
         return [
           formatDateTime(m.timestamp),
@@ -391,7 +391,7 @@ export const SMSReportsView: React.FC<SMSReportsViewProps> = ({ embeddedInClient
     } else {
       const header = ['Date', 'Range', 'Number', 'CLI', 'SMS'].join(',');
       const rows = (displayItems as SmsMessage[]).map(m => {
-        const rName = m.rangeName || resolveRangeName(m.country, m.phone, ranges);
+        const rName = resolveRangeName(m.country, m.phone, ranges) || m.rangeName || 'Direct';
         const cliName = m.cli || m.service || m.sender || 'Direct';
         return [
           `"${formatDateTime(m.timestamp)}"`,
@@ -431,7 +431,7 @@ export const SMSReportsView: React.FC<SMSReportsViewProps> = ({ embeddedInClient
     } else {
       exportData = (displayItems as SmsMessage[]).map(m => ({
         'Date': formatDateTime(m.timestamp),
-        'Range': m.rangeName || resolveRangeName(m.country, m.phone, ranges),
+        'Range': resolveRangeName(m.country, m.phone, ranges) || m.rangeName || 'Direct',
         'Number': m.phone,
         'CLI': m.cli || m.service || m.sender || 'Direct',
         'SMS': m.message,
@@ -452,64 +452,11 @@ export const SMSReportsView: React.FC<SMSReportsViewProps> = ({ embeddedInClient
     <div className="min-h-screen bg-[#edf2f7] p-2.5 sm:p-5 lg:p-6 font-sans text-slate-800 -m-2 sm:-m-4 lg:-m-6">
       <div className="max-w-4xl mx-auto space-y-4" id="sms-reports-view">
         
-        {/* TOP HEADER: Clean Title, Log Capacity Selector, Clear Logs Button, and Refresh */}
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 py-1 px-0.5">
-          <div className="flex items-center gap-3">
-            <h1 className="text-xl sm:text-2xl font-serif font-bold text-slate-800 tracking-tight select-none">
-              SMS Reports
-            </h1>
-            <span className="text-[11px] font-mono px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200">
-              Live Gateway Sync
-            </span>
-          </div>
-
-          <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap">
-            {/* Box Capacity / Buffer Size Selector (50, 100, 150, 500, 1000, 5000, 10000, All) */}
-            <div className="flex items-center gap-1.5 bg-white border border-slate-200 rounded-xl px-2.5 py-1 text-xs shadow-2xs">
-              <span className="text-slate-500 font-medium">Box Limit:</span>
-              <select
-                value={capacityLimit}
-                onChange={(e) => {
-                  const val = e.target.value === 'all' ? 'all' : Number(e.target.value);
-                  handleCapacityChange(val);
-                }}
-                className="bg-transparent font-bold text-blue-700 focus:outline-none cursor-pointer"
-                title="Synchronized live retention & report buffer size"
-              >
-                <option value={50}>50</option>
-                <option value={100}>100</option>
-                <option value={150}>150</option>
-                <option value={500}>500</option>
-                <option value={1000}>1,000</option>
-                <option value={5000}>5,000</option>
-                <option value={10000}>10,000</option>
-                <option value="all">All</option>
-              </select>
-            </div>
-
-            {/* Clear Logs Button */}
-            <button
-              type="button"
-              onClick={() => setShowClearModal(true)}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white border border-rose-200 hover:bg-rose-50 text-rose-700 text-xs font-semibold shadow-2xs transition-colors cursor-pointer"
-              title="Clear Logs"
-            >
-              <Trash2 className="w-3.5 h-3.5 text-rose-500" />
-              <span>Clear Logs</span>
-            </button>
-
-            {/* Refresh Button */}
-            <button
-              type="button"
-              onClick={handleShowReport}
-              disabled={isLoading}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-semibold shadow-2xs transition-colors cursor-pointer disabled:opacity-50"
-              title="Refresh Report"
-            >
-              <RefreshCw className={`w-3.5 h-3.5 text-blue-600 ${isLoading ? 'animate-spin' : ''}`} />
-              <span>Refresh</span>
-            </button>
-          </div>
+        {/* TOP HEADER: Clean Title (Removed Live Gateway Sync, Box Limit, Clear Logs, and Refresh as requested) */}
+        <div className="py-2 px-1">
+          <h1 className="text-2xl sm:text-3xl font-serif font-black text-slate-800 tracking-tight select-none">
+            SMS Reports
+          </h1>
         </div>
 
         {/* Clear Logs Confirmation Modal */}
@@ -744,12 +691,12 @@ export const SMSReportsView: React.FC<SMSReportsViewProps> = ({ embeddedInClient
               </div>
             </div>
 
-            {/* Action Buttons: Export Report (Amber/Orange) & Show Report (Vivid Blue) */}
+            {/* Action Buttons: Export Report & Show Report (Blue-Green-White theme) */}
             <div className="grid grid-cols-2 gap-3 pt-2">
               <button
                 type="button"
                 onClick={handleExportExcel}
-                className="w-full py-2.5 sm:py-3 px-4 rounded-xl bg-[#d97706] hover:bg-[#b45309] active:scale-[0.98] text-white font-medium text-sm sm:text-base shadow-xs transition-all text-center cursor-pointer"
+                className="w-full py-2.5 sm:py-3 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 active:scale-[0.98] text-white font-semibold text-sm sm:text-base shadow-xs transition-all text-center cursor-pointer border border-slate-700"
               >
                 Export Report
               </button>
@@ -757,7 +704,7 @@ export const SMSReportsView: React.FC<SMSReportsViewProps> = ({ embeddedInClient
               <button
                 type="submit"
                 disabled={isLoading}
-                className="w-full py-2.5 sm:py-3 px-4 rounded-xl bg-[#0080c6] hover:bg-[#006ea8] active:scale-[0.98] text-white font-medium text-sm sm:text-base shadow-xs transition-all text-center cursor-pointer disabled:opacity-50"
+                className="w-full py-2.5 sm:py-3 px-4 rounded-xl bg-gradient-to-r from-blue-600 via-blue-500 to-emerald-600 hover:from-blue-500 hover:to-emerald-500 active:scale-[0.98] text-white font-bold text-sm sm:text-base shadow-md shadow-blue-600/20 transition-all text-center cursor-pointer disabled:opacity-50"
               >
                 {isLoading ? 'Loading...' : 'Show Report'}
               </button>
@@ -1003,7 +950,7 @@ export const SMSReportsView: React.FC<SMSReportsViewProps> = ({ embeddedInClient
                   // Normal SMS Table Rows (Client column removed)
                   (paginatedItems as SmsMessage[]).map((msg) => {
                     const dateStr = formatDateTime(msg.timestamp);
-                    const rangeName = msg.rangeName || resolveRangeName(msg.country, msg.phone, ranges);
+                    const rangeName = resolveRangeName(msg.country, msg.phone, ranges) || msg.rangeName || 'Direct';
                     const cliName = (msg.cli || msg.service || msg.sender || 'Direct').trim();
 
                     return (

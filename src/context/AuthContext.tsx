@@ -11,6 +11,8 @@ interface AuthContextType {
     error?: string;
     isLocked?: boolean;
     lockedUntil?: number;
+    isInactive3Days?: boolean;
+    deactivatedReason?: string;
   }>;
   logout: (reason?: string) => Promise<void>;
   updateSettings: (newSettings: Partial<SiteSettings>) => Promise<boolean>;
@@ -184,7 +186,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           success: false, 
           error: data.error || 'Login failed',
           isLocked: !!data.isLocked,
-          lockedUntil: data.lockedUntil as number | undefined
+          lockedUntil: data.lockedUntil as number | undefined,
+          isInactive3Days: !!data.isInactive3Days,
+          deactivatedReason: data.deactivatedReason as string | undefined,
         };
       }
 

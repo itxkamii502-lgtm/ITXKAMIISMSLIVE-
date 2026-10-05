@@ -16,6 +16,8 @@ export interface ClientAccount {
   password?: string; // only visible when creating/updating or in admin secure view
   allowedServices: string[]; // e.g. ["*"] for all or ["WhatsApp", "Telegram", "Google"]
   status: 'active' | 'inactive';
+  deactivatedReason?: 'inactive_3_days' | string;
+  deactivatedAt?: number;
   createdAt: number;
   notes?: string;
   activeSessionsCount?: number;

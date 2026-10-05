@@ -258,11 +258,13 @@ app.post('/api/auth/login', (req: Request, res: Response) => {
 
   const result = store.login(username.trim().slice(0, 64), password.slice(0, 128));
   if (result.error || !result.session) {
-    const statusCode = result.isLocked ? 423 : 401;
+    const statusCode = result.isLocked ? 423 : (result.isInactive3Days ? 403 : 401);
     return res.status(statusCode).json({ 
       error: result.error || 'Authentication failed',
       isLocked: !!result.isLocked,
       lockedUntil: result.lockedUntil,
+      isInactive3Days: !!result.isInactive3Days,
+      deactivatedReason: result.deactivatedReason,
     });
   }
 
@@ -807,9 +809,10 @@ app.post('/api/ranges', requireAdmin, (req: AuthRequest, res: Response) => {
       range: result.range,
       addedCount: result.addedCount,
       duplicateCount: result.duplicateCount,
+      movedCount: result.movedCount,
       conflictSample: result.conflictSample,
-      message: result.duplicateCount > 0
-        ? `Added ${result.addedCount} new numbers. Skipped ${result.duplicateCount} duplicate numbers (Rule: 1 Number = 1 Range Only).`
+      message: result.movedCount > 0
+        ? `Processed ${result.addedCount} numbers for range "${result.range?.name}" (${result.movedCount} numbers automatically moved from previous ranges).`
         : `Successfully added all ${result.addedCount} numbers to range "${result.range?.name}".`,
     });
   } else {
@@ -831,9 +834,10 @@ app.post('/api/ranges', requireAdmin, (req: AuthRequest, res: Response) => {
       range: result.range,
       addedCount: result.addedCount,
       duplicateCount: result.duplicateCount,
+      movedCount: result.movedCount,
       conflictSample: result.conflictSample,
-      message: result.duplicateCount > 0
-        ? `Created range "${result.range?.name}" with ${result.addedCount} numbers. Skipped ${result.duplicateCount} duplicates (Rule: 1 Number = 1 Range Only).`
+      message: result.movedCount > 0
+        ? `Created range "${result.range?.name}" with ${result.addedCount} numbers (${result.movedCount} numbers automatically moved from other ranges).`
         : `Successfully created range "${result.range?.name}" with ${result.addedCount} numbers.`,
     });
   }
@@ -855,9 +859,10 @@ app.post('/api/ranges/:id/numbers', requireAdmin, (req: AuthRequest, res: Respon
     range: result.range,
     addedCount: result.addedCount,
     duplicateCount: result.duplicateCount,
+    movedCount: result.movedCount,
     conflictSample: result.conflictSample,
-    message: result.duplicateCount > 0
-      ? `Added ${result.addedCount} new numbers. Skipped ${result.duplicateCount} duplicates (Rule: 1 Number = 1 Range Only).`
+    message: result.movedCount > 0
+      ? `Processed ${result.addedCount} numbers for range (${result.movedCount} numbers moved from other ranges).`
       : `Successfully added all ${result.addedCount} numbers to range.`,
   });
 });

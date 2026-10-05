@@ -157,6 +157,32 @@ export const ClientsView: React.FC = () => {
     }
   };
 
+  const handleReactivateClient = async (clientId: string, username: string) => {
+    if (!session) return;
+    setActionLoadingId(clientId);
+    try {
+      const res = await fetch(`/api/clients/${clientId}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${session.token}`,
+        },
+        body: JSON.stringify({ status: 'active' }),
+      });
+      if (res.ok) {
+        showToast(`Client "${username}" reactivated successfully!`, 'success');
+        await fetchClients();
+      } else {
+        const err = await res.json();
+        showToast(err.error || 'Failed to reactivate client', 'error');
+      }
+    } catch {
+      showToast('Network error reactivating client', 'error');
+    } finally {
+      setActionLoadingId(null);
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!session) return;
@@ -446,15 +472,36 @@ export const ClientsView: React.FC = () => {
                                   <span className="uppercase">{c.status}</span>
                                 </span>
 
-                                <span className={`text-[10px] font-mono font-bold px-1.5 py-0.5 rounded border ${
-                                  onlineCount >= maxLimit 
-                                    ? 'bg-amber-500/10 text-amber-300 border-amber-500/30' 
-                                    : onlineCount > 0 
-                                      ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30' 
-                                      : 'bg-slate-800 text-slate-400 border-slate-700'
-                                }`}>
-                                  {onlineCount}/{maxLimit} users online
-                                </span>
+                                {c.status === 'inactive' && c.deactivatedReason === 'inactive_3_days' && (
+                                  <span className="px-1.5 py-0.5 rounded bg-amber-500/15 border border-amber-500/30 text-amber-300 text-[10px] font-mono font-bold">
+                                    3-Day Inactive
+                                  </span>
+                                )}
+
+                                {c.status === 'inactive' && (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleReactivateClient(c.id, c.username)}
+                                    disabled={actionLoadingId === c.id}
+                                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-bold transition-all shadow-xs cursor-pointer active:scale-95 disabled:opacity-50"
+                                    title="Reactivate this client account immediately"
+                                  >
+                                    <CheckCircle2 className="w-2.5 h-2.5" />
+                                    <span>Reactivate</span>
+                                  </button>
+                                )}
+
+                                {c.status === 'active' && (
+                                  <span className={`text-[10px] font-mono font-bold px-1.5 py-0.5 rounded border ${
+                                    onlineCount >= maxLimit 
+                                      ? 'bg-amber-500/10 text-amber-300 border-amber-500/30' 
+                                      : onlineCount > 0 
+                                        ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30' 
+                                        : 'bg-slate-800 text-slate-400 border-slate-700'
+                                  }`}>
+                                    {onlineCount}/{maxLimit} users online
+                                  </span>
+                                )}
                               </div>
 
                               {onlineCount > 0 && (

@@ -29,6 +29,8 @@ export const LoginScreen: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [lockedUntil, setLockedUntil] = useState<number | null>(null);
   const [remainingLockSec, setRemainingLockSec] = useState<number>(0);
+  const [inactiveModalOpen, setInactiveModalOpen] = useState(false);
+  const [deactivatedUser, setDeactivatedUser] = useState('');
 
   // Live countdown ticker for 15-minute lock duration
   useEffect(() => {
@@ -74,6 +76,10 @@ export const LoginScreen: React.FC = () => {
       if (result.isLocked && result.lockedUntil) {
         setLockedUntil(result.lockedUntil);
       }
+      if (result.isInactive3Days) {
+        setDeactivatedUser(cleanUser);
+        setInactiveModalOpen(true);
+      }
       setError(result.error || 'Incorrect username or password. Please check your credentials.');
       setIsSubmitting(false);
     }
@@ -83,41 +89,42 @@ export const LoginScreen: React.FC = () => {
   const lockSeconds = remainingLockSec % 60;
 
   return (
-    <div className="min-h-screen w-full bg-slate-950 flex flex-col items-center justify-center p-4 sm:p-6 relative overflow-hidden font-sans selection:bg-emerald-500 selection:text-slate-950">
-      {/* Ambient background glows */}
-      <div className="absolute inset-0 bg-[radial-gradient(ellipse_80%_80%_at_50%_-20%,rgba(16,185,129,0.12),rgba(255,255,255,0))]" />
-      <div className="absolute -top-40 -right-40 w-96 h-96 bg-emerald-500/10 rounded-full blur-3xl pointer-events-none" />
-      <div className="absolute -bottom-40 -left-40 w-96 h-96 bg-indigo-500/10 rounded-full blur-3xl pointer-events-none" />
+    <div className="min-h-screen w-full bg-[#090d1a] flex flex-col items-center justify-center p-4 sm:p-6 relative overflow-hidden font-sans selection:bg-blue-600 selection:text-white">
+      {/* Ambient background glows with Blue & Green & White illumination */}
+      <div className="absolute inset-0 bg-[radial-gradient(ellipse_80%_80%_at_50%_-15%,rgba(37,99,235,0.28),rgba(16,185,129,0.22),rgba(255,255,255,0.02))]" />
+      <div className="absolute -top-40 -right-40 w-[500px] h-[500px] bg-blue-600/15 rounded-full blur-3xl pointer-events-none" />
+      <div className="absolute -bottom-40 -left-40 w-[500px] h-[500px] bg-emerald-500/15 rounded-full blur-3xl pointer-events-none" />
 
       {/* Grid Pattern overlay */}
       <div 
-        className="absolute inset-0 opacity-[0.025] pointer-events-none" 
+        className="absolute inset-0 opacity-[0.035] pointer-events-none" 
         style={{
           backgroundImage: `url("data:image/svg+xml,%3Csvg width='30' height='30' viewBox='0 0 30 30' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1.5 0H0V1.5V30H1.5V1.5H30V0H1.5Z' fill='%23FFFFFF'/%3E%3C/svg%3E")`
         }} 
       />
 
       <div className="relative z-10 w-full max-w-md flex flex-col items-center">
-        {/* Main Brand Logo Header (Large & Prominent) */}
-        <div className="mb-7 flex flex-col items-center justify-center">
+        {/* Main Brand Logo Header (Large, Prominent & Distinct) */}
+        <div className="mb-8 flex flex-col items-center justify-center scale-105 sm:scale-110 transition-transform">
           <BrandLogo size="2xl" layout="vertical" />
         </div>
 
-        {/* Clean Login Card */}
+        {/* Clean Login Card - Professional White + Green + Blue */}
         <motion.div
           initial={{ opacity: 0, y: 15 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.3, ease: 'easeOut' }}
-          className="w-full bg-slate-900/95 border border-slate-800 rounded-3xl shadow-2xl backdrop-blur-xl p-7 sm:p-9"
+          className="w-full bg-slate-900/90 border border-slate-700/80 rounded-3xl shadow-[0_20px_50px_rgba(15,23,42,0.8),0_0_30px_rgba(37,99,235,0.15)] backdrop-blur-2xl p-7 sm:p-9 ring-1 ring-white/10"
           id="login-card-container"
         >
-          {/* Header Title */}
-          <div className="text-center space-y-1 mb-6">
-            <h1 className="text-2xl font-black text-white tracking-tight">
+          {/* Header Title with Tri-color Accent Bar */}
+          <div className="text-center space-y-1.5 mb-6">
+            <h1 className="text-2xl sm:text-3xl font-black text-white tracking-tight">
               Sign In
             </h1>
-            <p className="text-xs text-slate-400 font-medium">
-              Enter your credentials to access the portal
+            <div className="h-1 w-20 mx-auto rounded-full bg-gradient-to-r from-blue-500 via-emerald-400 to-white" />
+            <p className="text-xs text-slate-300 font-medium pt-1">
+              Enter your credentials to access the secure portal
             </p>
           </div>
 
@@ -138,7 +145,7 @@ export const LoginScreen: React.FC = () => {
                 <button
                   type="button"
                   onClick={clearLogoutReason}
-                  className="text-amber-400 hover:text-amber-200 text-xs font-bold px-1"
+                  className="text-amber-400 hover:text-amber-200 text-xs font-bold px-1 cursor-pointer"
                 >
                   ✕
                 </button>
@@ -209,13 +216,13 @@ export const LoginScreen: React.FC = () => {
           <form onSubmit={handleSubmit} className="space-y-4" id="login-form">
             <div>
               <label 
-                className="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-1.5" 
+                className="block text-xs font-bold text-white uppercase tracking-wider mb-1.5" 
                 htmlFor="username-input"
               >
                 Username
               </label>
               <div className="relative">
-                <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
+                <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-blue-400">
                   <User className="w-4 h-4" />
                 </div>
                 <input
@@ -229,20 +236,20 @@ export const LoginScreen: React.FC = () => {
                     if (error) setError(null);
                   }}
                   placeholder="Enter username"
-                  className="w-full pl-10 pr-4 py-3 bg-slate-950 border border-slate-800 rounded-xl text-sm text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition-all font-mono"
+                  className="w-full pl-10 pr-4 py-3 bg-slate-950/85 border border-slate-700/80 rounded-xl text-sm text-white placeholder-slate-400 focus:outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-500/30 transition-all font-mono shadow-inner"
                 />
               </div>
             </div>
 
             <div>
               <label 
-                className="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-1.5" 
+                className="block text-xs font-bold text-white uppercase tracking-wider mb-1.5" 
                 htmlFor="password-input"
               >
                 Password
               </label>
               <div className="relative">
-                <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
+                <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-emerald-400">
                   <Lock className="w-4 h-4" />
                 </div>
                 <input
@@ -256,12 +263,12 @@ export const LoginScreen: React.FC = () => {
                     if (error) setError(null);
                   }}
                   placeholder="Enter password"
-                  className="w-full pl-10 pr-10 py-3 bg-slate-950 border border-slate-800 rounded-xl text-sm text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition-all font-mono"
+                  className="w-full pl-10 pr-10 py-3 bg-slate-950/85 border border-slate-700/80 rounded-xl text-sm text-white placeholder-slate-400 focus:outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-500/30 transition-all font-mono shadow-inner"
                 />
                 <button
                   type="button"
                   onClick={() => setShowPassword(!showPassword)}
-                  className="absolute inset-y-0 right-0 pr-3.5 flex items-center text-slate-400 hover:text-slate-200 transition-colors cursor-pointer"
+                  className="absolute inset-y-0 right-0 pr-3.5 flex items-center text-slate-400 hover:text-white transition-colors cursor-pointer"
                   aria-label="Toggle password visibility"
                 >
                   {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
@@ -273,11 +280,11 @@ export const LoginScreen: React.FC = () => {
               id="login-submit-btn"
               type="submit"
               disabled={isSubmitting}
-              className={`w-full py-3.5 px-4 rounded-xl ${theme.primaryBg} shadow-lg shadow-emerald-500/20 font-bold transition-all flex items-center justify-center gap-2 text-sm disabled:opacity-50 disabled:cursor-not-allowed mt-4 cursor-pointer`}
+              className="w-full py-3.5 px-4 rounded-xl bg-gradient-to-r from-blue-600 via-blue-500 to-emerald-600 hover:from-blue-500 hover:via-blue-600 hover:to-emerald-500 text-white font-black shadow-xl shadow-blue-600/25 border border-white/20 transition-all flex items-center justify-center gap-2 text-sm disabled:opacity-50 disabled:cursor-not-allowed mt-5 cursor-pointer active:scale-[0.98]"
             >
               {isSubmitting ? (
                 <>
-                  <div className="w-4 h-4 border-2 border-slate-950 border-t-transparent rounded-full animate-spin" />
+                  <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
                   <span>Signing In...</span>
                 </>
               ) : (
@@ -290,6 +297,63 @@ export const LoginScreen: React.FC = () => {
           </form>
         </motion.div>
       </div>
+
+      {/* 3-Day Inactivity Account Deactivation Professional Modal */}
+      <AnimatePresence>
+        {inactiveModalOpen && (
+          <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 12 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 12 }}
+              className="w-full max-w-md bg-slate-900 border-2 border-amber-500/60 rounded-3xl p-6 sm:p-8 shadow-[0_25px_60px_-15px_rgba(0,0,0,0.9),0_0_35px_rgba(245,158,11,0.25)] space-y-5 text-slate-100 ring-1 ring-white/10"
+            >
+              <div className="flex items-start gap-4">
+                <div className="w-13 h-13 rounded-2xl bg-gradient-to-br from-amber-500/25 to-rose-500/25 border-2 border-amber-500/40 flex items-center justify-center text-amber-400 shrink-0 shadow-xl">
+                  <AlertCircle className="w-7 h-7" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <span className="text-[11px] font-mono font-bold tracking-wider text-amber-400 uppercase block">
+                    Security Policy Notice
+                  </span>
+                  <h3 className="text-xl font-black text-white tracking-tight mt-0.5">
+                    Account Deactivated
+                  </h3>
+                  <div className="h-0.5 w-14 rounded-full bg-gradient-to-r from-amber-400 via-emerald-400 to-transparent mt-1.5" />
+                </div>
+              </div>
+
+              <div className="p-4 rounded-2xl bg-slate-950/95 border border-slate-800 space-y-3 text-xs text-slate-300 leading-relaxed shadow-inner">
+                <p className="font-semibold text-white">
+                  Notice for Client Account: <span className="font-mono text-emerald-400 font-bold bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/30">"{deactivatedUser || username}"</span>
+                </p>
+                <p>
+                  Your client account has been automatically deactivated because you did not open or access the portal within the required <span className="font-bold text-amber-300">3-day activity window</span>.
+                </p>
+                <div className="p-3.5 rounded-xl bg-blue-500/10 border border-blue-500/30 text-blue-100 space-y-1.5">
+                  <div className="font-bold text-blue-300 flex items-center gap-1.5 text-xs">
+                    <KeyRound className="w-4 h-4 text-blue-400" />
+                    <span>How to Reactivate Your Account:</span>
+                  </div>
+                  <p className="text-[11px] text-slate-300 leading-normal">
+                    Please contact your System Administrator to request account reactivation. Once reactivated by the administrator, you will be able to log in immediately.
+                  </p>
+                </div>
+              </div>
+
+              <div className="pt-1">
+                <button
+                  type="button"
+                  onClick={() => setInactiveModalOpen(false)}
+                  className="w-full py-3.5 px-4 rounded-xl bg-gradient-to-r from-blue-600 via-blue-500 to-emerald-600 hover:from-blue-500 hover:to-emerald-500 text-white font-black text-xs transition-all shadow-lg shadow-blue-500/25 cursor-pointer text-center active:scale-[0.98] border border-white/20"
+                >
+                  Understood & Close
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 };

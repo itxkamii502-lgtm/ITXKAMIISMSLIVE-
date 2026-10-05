@@ -373,8 +373,8 @@ export function resolveRangeName(country?: string, phone?: string, ranges?: Numb
   }
 
   if (ranges && ranges.length > 0 && cleanPhone) {
-    // 1. Exact match in range numbers
-    const exactMatch = ranges.find(r => r.numbers && (
+    // 1. Exact match in range numbers (only ranges that actually have numbers configured)
+    const exactMatch = ranges.find(r => r.numbers && r.numbers.length > 0 && (
       r.numbers.includes(cleanPhone) || 
       r.numbers.includes('+' + cleanPhone) ||
       (cleanPhone.startsWith('00') && r.numbers.includes(cleanPhone.slice(2)))
@@ -383,10 +383,11 @@ export function resolveRangeName(country?: string, phone?: string, ranges?: Numb
       return exactMatch.name;
     }
 
-    // 2. National to International and vice versa
+    // 2. National to International and vice versa (only against ranges with numbers)
     for (const range of ranges) {
+      if (!range.numbers || range.numbers.length === 0) continue;
       const cleanPrefix = (range.prefix || '').replace(/[^\d]/g, '');
-      if (cleanPrefix && range.numbers) {
+      if (cleanPrefix) {
         // e.g. national 0610... -> prefix 224 + 610...
         if (cleanPhone.startsWith('0') && cleanPhone.length >= 8) {
           const intlCandidate = cleanPrefix + cleanPhone.slice(1);
@@ -406,37 +407,31 @@ export function resolveRangeName(country?: string, phone?: string, ranges?: Numb
       }
     }
 
-    // 3. Suffix match (last 8 digits)
+    // 3. Suffix match (last 8 digits) only against actual range numbers
     if (cleanPhone.length >= 8) {
       const suffix8 = cleanPhone.slice(-8);
       for (const range of ranges) {
-        if (range.numbers && range.numbers.some(n => n.endsWith(suffix8))) {
+        if (range.numbers && range.numbers.length > 0 && range.numbers.some(n => n.endsWith(suffix8))) {
           return range.name;
         }
       }
     }
-
-    // 4. Prefix match (longest prefix first)
-    const matchingRanges = ranges.filter(r => {
-      const cleanPrefix = (r.prefix || '').replace(/[^\d]/g, '');
-      return cleanPrefix && cleanPhone.startsWith(cleanPrefix);
-    });
-
-    if (matchingRanges.length > 0) {
-      if (country) {
-        const cLower = country.toLowerCase();
-        const noteMatch = matchingRanges.find(r => 
-          (r.countryNote && r.countryNote.toLowerCase().includes(cLower)) ||
-          r.name.toLowerCase().includes(cLower)
-        );
-        if (noteMatch) return noteMatch.name;
-      }
-      matchingRanges.sort((a, b) => b.prefix.length - a.prefix.length);
-      return matchingRanges[0].name;
-    }
   }
 
-  return resolveCountryName(country, phone);
+  // Fallback: If phone is not assigned to any custom range numbers (e.g. range numbers cleared),
+  // ALWAYS return genuine geographic country name (e.g. "Guinea", "Tanzania", "Pakistan")!
+  const detected = getCountryFromPhone(cleanPhone || phone || '');
+  if (detected && detected !== 'Worldwide') {
+    return detected;
+  }
+
+  // If phone detection is Worldwide, verify country is not a custom range name
+  const isKnownRangeName = ranges?.some(r => r.name.toLowerCase() === (country || '').toLowerCase());
+  if (country && !isKnownRangeName) {
+    return resolveCountryName(country, phone);
+  }
+
+  return detected || 'Worldwide';
 }
 
 /**

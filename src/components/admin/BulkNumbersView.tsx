@@ -489,9 +489,12 @@ export const BulkNumbersView: React.FC<BulkNumbersViewProps> = ({ token }) => {
       const data = await res.json();
       if (res.ok && data.success) {
         setQuickAddText('');
-        if (data.duplicateCount > 0) {
-          alert(`Added ${data.addedCount} new numbers. Skipped ${data.duplicateCount} duplicate numbers (Rule: 1 Number = 1 Range Only).`);
-        }
+        const feedbackMsg = data.message || (
+          data.movedCount > 0
+            ? `Successfully processed ${data.addedCount} numbers (${data.movedCount} numbers automatically moved from previous range).`
+            : `Successfully added ${data.addedCount} numbers to range "${managingRange.name}".`
+        );
+        setStatusMessage({ type: 'success', text: feedbackMsg });
         await fetchRangeNumbers(managingRange.id, numbersSearchQuery, numbersPage);
         await fetchRanges();
       } else {
@@ -572,10 +575,12 @@ export const BulkNumbersView: React.FC<BulkNumbersViewProps> = ({ token }) => {
         if (modalFileInputRef.current) modalFileInputRef.current.value = '';
         setIsModalBulkOpen(false);
 
-        alert(data.duplicateCount > 0 
-          ? `Added ${data.addedCount} new numbers. Skipped ${data.duplicateCount} duplicate numbers (Rule: 1 Number = 1 Range Only).`
-          : `Successfully added all ${data.addedCount} numbers to range "${managingRange.name}".`
+        const feedbackMsg = data.message || (
+          data.movedCount > 0
+            ? `Successfully processed ${data.addedCount} numbers (${data.movedCount} numbers automatically transferred from previous range).`
+            : `Successfully added all ${data.addedCount} numbers to range "${managingRange.name}".`
         );
+        setStatusMessage({ type: 'success', text: feedbackMsg });
 
         await fetchRangeNumbers(managingRange.id, numbersSearchQuery, numbersPage);
         await fetchRanges();
@@ -1320,7 +1325,7 @@ export const BulkNumbersView: React.FC<BulkNumbersViewProps> = ({ token }) => {
                   {duplicateCheckResult.duplicates.length > 0 && (
                     <div className="space-y-1 pt-1">
                       <div className="text-[11px] font-semibold text-amber-300">
-                        The following numbers will automatically be skipped during save:
+                        Duplicate & Relocation Details:
                       </div>
                       <div className="max-h-28 overflow-y-auto space-y-1 font-mono text-[11px] text-slate-400">
                         {duplicateCheckResult.duplicates.slice(0, 15).map((d, i) => (
