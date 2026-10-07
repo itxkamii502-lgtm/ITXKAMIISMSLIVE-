@@ -331,9 +331,9 @@ export const LiveSMSView: React.FC = () => {
   // Distinct ranges & CLIs based on active partition filter
   const partFiltered = messages.filter((m) => matchesPartition(m, selectedPart));
 
-  const availableRanges = Array.from(
-    new Set(partFiltered.map((m) => (m.rangeName || resolveRangeName(m.country, m.phone, ranges)).trim()).filter(Boolean))
-  ).sort();
+  const availableRanges: string[] = Array.from(
+    new Set<string>(partFiltered.map((m) => (m.rangeName || resolveRangeName(m.country, m.phone, ranges)).trim()).filter(Boolean))
+  ).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base', numeric: true }));
 
   // All CLIs available in current partition
   const availableClis = Array.from(

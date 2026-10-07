@@ -1578,7 +1578,7 @@ class Store {
     return Array.from(this.ranges.values()).map(r => ({
       ...r,
       totalNumbers: r.numbers.length,
-    })).sort((a, b) => b.createdAt - a.createdAt);
+    })).sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base', numeric: true }));
   }
 
   public getRange(id: string): NumberRange | undefined {

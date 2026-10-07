@@ -139,7 +139,9 @@ export const BulkNumbersView: React.FC<BulkNumbersViewProps> = ({ token }) => {
       });
       if (res.ok) {
         const data = await res.json();
-        const loadedRanges: NumberRange[] = data.ranges || [];
+        const loadedRanges: NumberRange[] = (data.ranges || []).sort((a: NumberRange, b: NumberRange) =>
+          a.name.localeCompare(b.name, undefined, { sensitivity: 'base', numeric: true })
+        );
         setRanges(loadedRanges);
         if (loadedRanges.length > 0 && !selectedRangeId) {
           setSelectedRangeId(loadedRanges[0].id);
@@ -848,16 +850,18 @@ export const BulkNumbersView: React.FC<BulkNumbersViewProps> = ({ token }) => {
     document.body.removeChild(link);
   };
 
-  // Filter ranges
-  const filteredRanges = ranges.filter(r => {
-    if (!rangesSearch.trim()) return true;
-    const q = rangesSearch.toLowerCase();
-    return (
-      r.name.toLowerCase().includes(q) ||
-      r.prefix.includes(q) ||
-      (r.countryNote && r.countryNote.toLowerCase().includes(q))
-    );
-  });
+  // Filter ranges and sort alphabetically A to Z
+  const filteredRanges = ranges
+    .filter(r => {
+      if (!rangesSearch.trim()) return true;
+      const q = rangesSearch.toLowerCase();
+      return (
+        r.name.toLowerCase().includes(q) ||
+        r.prefix.includes(q) ||
+        (r.countryNote && r.countryNote.toLowerCase().includes(q))
+      );
+    })
+    .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base', numeric: true }));
 
   return (
     <div className="space-y-6 pb-12" id="bulk-numbers-container">
@@ -1097,11 +1101,13 @@ export const BulkNumbersView: React.FC<BulkNumbersViewProps> = ({ token }) => {
                     className="w-full px-3.5 py-2 bg-slate-950 border border-slate-800 rounded-xl text-white text-xs focus:outline-none focus:border-blue-500 cursor-pointer font-sans"
                     id="existing-range-select"
                   >
-                    {ranges.map(r => (
-                      <option key={r.id} value={r.id} className="bg-slate-900 text-white">
-                        {r.name} (+{r.prefix}) — {r.totalNumbers || 0} numbers {r.countryNote ? `[${r.countryNote}]` : ''}
-                      </option>
-                    ))}
+                    {[...ranges]
+                      .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base', numeric: true }))
+                      .map(r => (
+                        <option key={r.id} value={r.id} className="bg-slate-900 text-white">
+                          {r.name} (+{r.prefix}) — {r.totalNumbers || 0} numbers {r.countryNote ? `[${r.countryNote}]` : ''}
+                        </option>
+                      ))}
                   </select>
                 )}
               </div>
