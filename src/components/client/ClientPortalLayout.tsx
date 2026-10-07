@@ -74,7 +74,7 @@ export const ClientPortalLayout: React.FC = () => {
                   ? 'bg-rose-50 border-rose-300 text-rose-700 animate-pulse'
                   : 'bg-slate-50 border-slate-200 text-slate-800'
               }`}
-              title="Automatic session auto-logout countdown (5 minutes strict)"
+              title={`Automatic session auto-logout countdown (${formattedTimeRemaining} remaining)`}
             >
               <Clock className={`w-3.5 h-3.5 ${isExpiringSoon ? 'text-rose-500' : 'text-blue-600'}`} />
               <span className="hidden xs:inline text-slate-500 font-sans font-normal text-[11px]">Session:</span>

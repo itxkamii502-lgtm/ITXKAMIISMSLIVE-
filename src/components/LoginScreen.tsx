@@ -82,6 +82,9 @@ export const LoginScreen: React.FC = () => {
       }
       setError(result.error || 'Incorrect username or password. Please check your credentials.');
       setIsSubmitting(false);
+    } else {
+      // Ensure Dashboard is strictly the first view upon login
+      window.history.replaceState(null, '', '/admin/dashboard');
     }
   };
 

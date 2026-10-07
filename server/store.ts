@@ -774,7 +774,13 @@ class Store {
           }
 
           const token = generateToken();
-          const sessionMinutes = this.settings.clientSessionMinutes || 5;
+          const sessionMinutes = (client.sessionMinutes && client.sessionMinutes > 0)
+            ? client.sessionMinutes
+            : (this.settings.clientSessionMinutes || 5);
+          const storageLimit = (client.storageLimit && client.storageLimit >= 500)
+            ? client.storageLimit
+            : (this.settings.clientMaxRetention && this.settings.clientMaxRetention >= 500 ? this.settings.clientMaxRetention : 500);
+
           const session: UserSession = {
             token,
             userId: client.id,
@@ -782,6 +788,8 @@ class Store {
             role: 'client',
             createdAt: now,
             expiresAt: now + sessionMinutes * 60 * 1000,
+            durationSeconds: sessionMinutes * 60,
+            storageLimit,
             allowedServices: client.allowedServices,
           };
           this.sessions.set(token, session);
@@ -923,23 +931,44 @@ class Store {
     allowedServices?: string[]; 
     notes?: string;
     maxConcurrentSessions?: number;
+    sessionMinutes?: number;
+    storageLimit?: number;
   }): { client?: ClientAccount; error?: string } {
     const rawUser = sanitizeInputString(data.username, 32);
-    if (!rawUser || rawUser.length < 2) return { error: 'Client username must be at least 2 characters' };
+    if (!rawUser || rawUser.length < 5) {
+      return { error: 'Client username must be at least 5 characters' };
+    }
     if (!/^[a-zA-Z0-9_.\-@]+$/.test(rawUser)) {
       return { error: 'Client username can only contain letters, numbers, hyphens, underscores, dots, or @' };
     }
 
+    // Strict system-wide unique username check:
+    if (this.admin && this.admin.username && this.admin.username.toLowerCase() === rawUser.toLowerCase()) {
+      return { error: 'Username already exists in the system (reserved for admin)' };
+    }
+
     for (const c of this.clients.values()) {
       if (c.username.toLowerCase() === rawUser.toLowerCase()) {
-        return { error: 'Client username already exists' };
+        return { error: 'Username already exists in the system. Each client must have a unique specific username.' };
       }
     }
 
-    const sanitizedPassword = sanitizeInputString(data.password, 128) || ('client' + Math.floor(1000 + Math.random() * 9000));
+    const sanitizedPassword = sanitizeInputString(data.password, 128);
+    if (!sanitizedPassword || sanitizedPassword.length < 5) {
+      return { error: 'Client password must be at least 5 characters (letters, numbers, or symbols)' };
+    }
+
     const sanitizedServices = Array.isArray(data.allowedServices)
       ? data.allowedServices.slice(0, 50).map(s => sanitizeInputString(s, 64)).filter(Boolean)
       : ['*'];
+
+    const sessionMinutes = data.sessionMinutes && Number(data.sessionMinutes) > 0
+      ? Math.max(1, Math.min(1440, Number(data.sessionMinutes)))
+      : (this.settings.clientSessionMinutes || 5);
+
+    const storageLimit = data.storageLimit && Number(data.storageLimit) >= 500
+      ? Math.max(500, Math.min(50000, Number(data.storageLimit)))
+      : (this.settings.clientMaxRetention && this.settings.clientMaxRetention >= 500 ? this.settings.clientMaxRetention : 500);
 
     const id = 'client-' + generateId();
     const newClient: ClientAccount = {
@@ -950,6 +979,8 @@ class Store {
       status: 'active',
       createdAt: Date.now(),
       notes: sanitizeInputString(data.notes, 500),
+      sessionMinutes,
+      storageLimit,
       lastActive: Date.now(),
       maxConcurrentSessions: Math.max(1, Math.min(20, Number(data.maxConcurrentSessions) || 3)),
       isLocked: false,
@@ -965,16 +996,34 @@ class Store {
     if (!client) return { error: 'Client not found' };
 
     if (data.username) {
-      const u = data.username.trim();
+      const u = sanitizeInputString(data.username, 32);
+      if (u.length < 5) {
+        return { error: 'Client username must be at least 5 characters' };
+      }
+      if (this.admin && this.admin.username && this.admin.username.toLowerCase() === u.toLowerCase()) {
+        return { error: 'Username already exists in the system (reserved for admin)' };
+      }
       for (const [cid, c] of this.clients.entries()) {
         if (cid !== id && c.username.toLowerCase() === u.toLowerCase()) {
-          return { error: 'Username already in use by another client' };
+          return { error: 'Username already exists in the system. Each client must have a unique specific username.' };
         }
       }
       client.username = u;
     }
 
-    if (data.password !== undefined) client.password = data.password;
+    if (data.password !== undefined && data.password.trim() !== '') {
+      const p = sanitizeInputString(data.password, 128);
+      if (p.length < 5) {
+        return { error: 'Client password must be at least 5 characters (letters, numbers, or symbols)' };
+      }
+      client.password = p;
+    }
+    if (data.sessionMinutes !== undefined && Number(data.sessionMinutes) > 0) {
+      client.sessionMinutes = Math.max(1, Math.min(1440, Number(data.sessionMinutes)));
+    }
+    if (data.storageLimit !== undefined && Number(data.storageLimit) >= 500) {
+      client.storageLimit = Math.max(500, Math.min(50000, Number(data.storageLimit)));
+    }
     if (data.allowedServices !== undefined) client.allowedServices = data.allowedServices;
     if (data.notes !== undefined) client.notes = data.notes;
     if (data.maxConcurrentSessions !== undefined) {
@@ -2039,10 +2088,10 @@ class Store {
       }
     }
 
-    // Limit memory array based on configured retention setting
-    const maxRetention = Math.max(100, this.settings.maxSmsRetention || 2000);
-    if (this.messages.length > maxRetention) {
-      this.messages.length = maxRetention;
+    // Admin retains full date-to-date database archive (up to 100,000)
+    const adminMaxRetention = Math.max(50000, this.settings.maxSmsRetention || 100000);
+    if (this.messages.length > adminMaxRetention) {
+      this.messages.length = adminMaxRetention;
     }
 
     if (data.providerId) {
@@ -2255,13 +2304,13 @@ class Store {
     return deleted;
   }
 
-  public getMessages(role: UserRole, allowedServices?: string[], query?: string, limit?: number, part?: string | number): SmsMessage[] {
+  public getMessages(role: UserRole, allowedServices?: string[], query?: string, limit?: number, part?: string | number, clientId?: string): SmsMessage[] {
     let list = this.messages;
 
     // If client role:
     // 1. Strictly hide any message that is blocked by admin client filters
     // 2. Hide messages prior to clientClearedAt (so client history can be cleared while admin keeps archive)
-    // 3. Obey clientMaxRetention limit (FIFO: new come in at top, old past limit drop off)
+    // 3. Obey client storage limit / clientMaxRetention (FIFO rolling buffer: minimum 500)
     if (role === 'client') {
       const pStr = part !== undefined && part !== null && String(part).trim() !== '' && String(part).toLowerCase() !== 'all'
         ? String(part).toLowerCase().trim()
@@ -2331,14 +2380,24 @@ class Store {
     }
 
     // Capacity buffer calculation:
-    // If client role: bounded by clientMaxRetention (FIFO rolling window)
+    // If client role: bounded by specific client storageLimit or clientMaxRetention (FIFO rolling window, minimum 500)
     let effectiveLimit: number;
     if (role === 'client') {
-      const clientCap = this.settings.clientMaxRetention || 1000;
+      let clientCap = 500;
+      if (clientId) {
+        const clientObj = this.clients.get(clientId);
+        if (clientObj?.storageLimit && clientObj.storageLimit >= 500) {
+          clientCap = clientObj.storageLimit;
+        } else if (this.settings.clientMaxRetention && this.settings.clientMaxRetention >= 500) {
+          clientCap = this.settings.clientMaxRetention;
+        }
+      } else if (this.settings.clientMaxRetention && this.settings.clientMaxRetention >= 500) {
+        clientCap = this.settings.clientMaxRetention;
+      }
       effectiveLimit = limit && limit > 0 ? Math.min(limit, clientCap) : clientCap;
     } else {
-      // Admin role: sees full buffer
-      effectiveLimit = limit && limit > 0 ? limit : (this.settings.maxSmsRetention || 20000);
+      // Admin role: sees full permanent archive
+      effectiveLimit = limit && limit > 0 ? limit : 100000;
     }
 
     return list.slice(0, effectiveLimit);
@@ -2718,7 +2777,25 @@ class Store {
     }
 
     // Normal mode: attach resolved rangeName & true country to each message dynamically
-    const resolvedMessages = list.slice(0, params.limit || 5000).map(m => {
+    let maxAllowed: number;
+    if (params.role === 'client') {
+      let clientBoxLimit = 500;
+      if (params.clientId) {
+        const clientObj = this.clients.get(params.clientId);
+        if (clientObj?.storageLimit && clientObj.storageLimit >= 500) {
+          clientBoxLimit = clientObj.storageLimit;
+        } else if (this.settings.clientMaxRetention && this.settings.clientMaxRetention >= 500) {
+          clientBoxLimit = this.settings.clientMaxRetention;
+        }
+      } else if (this.settings.clientMaxRetention && this.settings.clientMaxRetention >= 500) {
+        clientBoxLimit = this.settings.clientMaxRetention;
+      }
+      maxAllowed = params.limit ? Math.min(params.limit, clientBoxLimit) : clientBoxLimit;
+    } else {
+      maxAllowed = params.limit || 50000;
+    }
+
+    const resolvedMessages = list.slice(0, maxAllowed).map(m => {
       const detectedC = getCountryByPhonePrefix(m.phone);
       const trueCountry = (detectedC && detectedC !== 'Worldwide') ? detectedC : (m.country || 'Worldwide');
       const matchedR = this.findRangeForPhone(m.phone, trueCountry);
@@ -2753,10 +2830,14 @@ class Store {
     monthStart.setHours(0, 0, 0, 0);
     const monthStartMs = monthStart.getTime();
 
+    const yearStart = new Date(todayStart.getFullYear(), 0, 1, 0, 0, 0, 0);
+    const yearStartMs = yearStart.getTime();
+
     let todaySms = 0;
     let yesterdaySms = 0;
     let thisWeekSms = 0;
     let thisMonthSms = 0;
+    let thisYearSms = 0;
 
     for (const m of this.messages) {
       const ts = m.timestamp || 0;
@@ -2770,6 +2851,9 @@ class Store {
       }
       if (ts >= monthStartMs) {
         thisMonthSms++;
+      }
+      if (ts >= yearStartMs) {
+        thisYearSms++;
       }
     }
 
@@ -2817,6 +2901,7 @@ class Store {
       yesterdaySms,
       thisWeekSms,
       thisMonthSms,
+      thisYearSms,
       dailyStats,
       activeClients,
       activeProviders: this.apiProviders.size,

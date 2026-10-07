@@ -146,30 +146,34 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     refreshMe();
   }, [fetchSettings, refreshMe]);
 
-  // Handle countdown timer (crucial for client role 5-minute timeout)
+  // Handle countdown timer for client role (strictly obeys configured duration, immune to client/server clock skew)
   useEffect(() => {
-    if (!session) return;
+    if (!session || session.role !== 'client') return;
 
-    const calculateRemaining = () => {
-      const remainingMs = session.expiresAt - Date.now();
-      return Math.max(0, Math.floor(remainingMs / 1000));
-    };
+    const configuredMinutes = settings?.clientSessionMinutes || 5;
+    const fallbackSec = session.durationSeconds && session.durationSeconds > 0 
+      ? session.durationSeconds 
+      : (configuredMinutes * 60);
 
-    setTimeRemaining(calculateRemaining());
+    const updateTimer = () => {
+      let remainingSec = 0;
+      if (session.expiresAt && session.expiresAt > 0) {
+        remainingSec = Math.max(0, Math.floor((session.expiresAt - Date.now()) / 1000));
+      } else {
+        remainingSec = fallbackSec;
+      }
 
-    const interval = setInterval(() => {
-      const remainingSec = calculateRemaining();
       setTimeRemaining(remainingSec);
 
-      // Expired!
       if (remainingSec <= 0) {
-        clearInterval(interval);
         logout('Your session time limit has ended. For security reasons, you have been logged out.');
       }
-    }, 1000);
+    };
 
+    updateTimer();
+    const interval = setInterval(updateTimer, 1000);
     return () => clearInterval(interval);
-  }, [session, logout]);
+  }, [session, logout, settings?.clientSessionMinutes]);
 
   const login = async (username: string, password: string) => {
     try {

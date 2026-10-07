@@ -431,8 +431,9 @@ app.get('/api/sms', requireAuth, (req: AuthRequest, res: Response) => {
   const reqLimit = req.query.limit ? parseInt(req.query.limit as string) : undefined;
   const limit = reqLimit && reqLimit > 0 ? Math.min(reqLimit, 50000) : configuredMax;
   const part = req.query.part as string | undefined;
+  const clientId = role === 'client' ? req.session?.userId : undefined;
 
-  const messages = store.getMessages(role, allowedServices, query, limit, part);
+  const messages = store.getMessages(role, allowedServices, query, limit, part, clientId);
   res.json({
     messages,
     count: messages.length,
@@ -450,7 +451,7 @@ const handleSmsReports = (req: AuthRequest, res: Response) => {
   const range = (req.query.range || req.body?.range) as string | undefined;
   const number = (req.query.number || req.body?.number) as string | undefined;
   const cli = (req.query.cli || req.body?.cli) as string | undefined;
-  const clientId = (req.query.clientId || req.body?.clientId) as string | undefined;
+  const clientId = role === 'client' ? req.session?.userId : ((req.query.clientId || req.body?.clientId) as string | undefined);
   const rawGroupBy = req.query.groupBy || req.body?.groupBy;
   const query = (req.query.q || req.body?.q) as string | undefined;
   const part = (req.query.part || req.body?.part) as string | undefined;

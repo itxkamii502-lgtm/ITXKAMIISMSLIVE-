@@ -121,8 +121,8 @@ export const ClientLiveSMS: React.FC = () => {
       abortControllerRef.current = controller;
 
       const queryPart = selectedPart && selectedPart !== 'all' ? `&part=${encodeURIComponent(selectedPart)}` : '';
-      const targetLimit = settings?.maxSmsRetention || 2000;
-      const res = await fetch(`/api/sms?limit=${targetLimit}${queryPart}`, {
+      const clientBoxLimit = session?.storageLimit || settings?.clientMaxRetention || 500;
+      const res = await fetch(`/api/sms?limit=${clientBoxLimit}${queryPart}`, {
         headers: {
           Authorization: `Bearer ${session.token}`,
         },
@@ -137,7 +137,7 @@ export const ClientLiveSMS: React.FC = () => {
       if (res.ok) {
         const data = await res.json();
         const rawMsgs: SmsMessage[] = data.messages || [];
-        const newMsgs = rawMsgs.filter((m) => !m.isClientBlocked);
+        const newMsgs = rawMsgs.filter((m) => !m.isClientBlocked).slice(0, clientBoxLimit);
         previousMessageCount.current = newMsgs.length;
         setMessages(newMsgs);
       }
@@ -186,9 +186,10 @@ export const ClientLiveSMS: React.FC = () => {
         try {
           const newMsg: SmsMessage = JSON.parse(event.data);
           if (newMsg && newMsg.id && !newMsg.isClientBlocked) {
+            const clientBoxLimit = session?.storageLimit || settings?.clientMaxRetention || 500;
             setMessages((prev) => {
               if (prev.some((m) => m.id === newMsg.id)) return prev;
-              return [newMsg, ...prev];
+              return [newMsg, ...prev].slice(0, clientBoxLimit);
             });
           }
         } catch {

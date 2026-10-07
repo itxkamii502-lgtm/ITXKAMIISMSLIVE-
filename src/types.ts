@@ -7,6 +7,8 @@ export interface UserSession {
   role: UserRole;
   expiresAt: number; // Unix timestamp (ms)
   createdAt: number;
+  durationSeconds?: number; // Total configured session duration in seconds
+  storageLimit?: number; // Client OTP box storage limit (min 500)
   allowedServices?: string[];
 }
 
@@ -20,6 +22,8 @@ export interface ClientAccount {
   deactivatedAt?: number;
   createdAt: number;
   notes?: string;
+  sessionMinutes?: number; // Configured session duration in minutes (e.g. 5)
+  storageLimit?: number; // Client OTP box storage capacity (min 500, e.g. 500, 1000)
   activeSessionsCount?: number;
   lastActive?: number; // Last activity timestamp (ms)
   lastLoginAt?: number; // Last login timestamp (ms)
@@ -146,6 +150,7 @@ export interface SystemStats {
   yesterdaySms?: number;
   thisWeekSms?: number;
   thisMonthSms?: number;
+  thisYearSms?: number;
   dailyStats?: { date: string; count: number; label: string }[];
   activeClients: number;
   activeProviders: number;

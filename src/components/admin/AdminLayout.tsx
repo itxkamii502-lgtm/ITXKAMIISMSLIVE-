@@ -32,10 +32,10 @@ import { THEMES } from '../../utils/theme';
 type AdminTab = 'dashboard' | 'providers' | 'clients' | 'sms' | 'sms-reports' | 'client-filters' | 'settings' | 'bulk-numbers';
 
 const TAB_TO_PATH: Record<AdminTab, string> = {
+  'dashboard': '/admin/dashboard',
   'sms-reports': '/admin/sms-reports',
   'sms': '/admin/sms',
   'client-filters': '/admin/client-filters',
-  'dashboard': '/admin/dashboard',
   'providers': '/admin/providers',
   'clients': '/admin/clients',
   'settings': '/admin/settings',
@@ -43,14 +43,15 @@ const TAB_TO_PATH: Record<AdminTab, string> = {
 };
 
 const PATH_TO_TAB: Record<string, AdminTab> = {
-  '/admin': 'sms-reports',
-  '/admin/': 'sms-reports',
+  '/admin': 'dashboard',
+  '/admin/': 'dashboard',
+  '/': 'dashboard',
+  '/admin/dashboard': 'dashboard',
   '/admin/sms-reports': 'sms-reports',
   '/admin/reports': 'sms-reports',
   '/admin/sms': 'sms',
   '/admin/live-sms': 'sms',
   '/admin/client-filters': 'client-filters',
-  '/admin/dashboard': 'dashboard',
   '/admin/providers': 'providers',
   '/admin/clients': 'clients',
   '/admin/settings': 'settings',
@@ -61,21 +62,22 @@ export const AdminLayout: React.FC = () => {
   const { session, logout, settings } = useAuth();
   const theme = settings?.theme ? THEMES[settings.theme] : THEMES.emerald;
 
-  // Sync active tab with browser URL
+  // Sync active tab with browser URL - strictly defaults to 'dashboard' upon login
   const [activeTab, setActiveTabState] = useState<AdminTab>(() => {
     const currentPath = window.location.pathname;
     if (PATH_TO_TAB[currentPath]) {
       return PATH_TO_TAB[currentPath];
     }
-    return 'sms-reports';
+    return 'dashboard';
   });
 
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
-  const navigateToTab = (tab: AdminTab) => {
-    setActiveTabState(tab);
-    const targetPath = TAB_TO_PATH[tab] || '/admin/sms-reports';
+  const navigateToTab = (tab: string) => {
+    const resolvedTab: AdminTab = tab === 'reports' ? 'sms-reports' : (tab as AdminTab);
+    setActiveTabState(resolvedTab);
+    const targetPath = TAB_TO_PATH[resolvedTab] || '/admin/dashboard';
     if (window.location.pathname !== targetPath) {
       window.history.pushState(null, '', targetPath);
     }
@@ -91,20 +93,22 @@ export const AdminLayout: React.FC = () => {
     };
     window.addEventListener('popstate', handlePopState);
     
-    // Ensure initial URL matches active tab
-    const initialPath = TAB_TO_PATH[activeTab] || '/admin/sms-reports';
-    if (!PATH_TO_TAB[window.location.pathname]) {
+    // Ensure initial URL matches active tab (strictly defaults to /admin/dashboard)
+    const initialPath = TAB_TO_PATH[activeTab] || '/admin/dashboard';
+    if (!PATH_TO_TAB[window.location.pathname] || window.location.pathname === '/login') {
       window.history.replaceState(null, '', initialPath);
+    } else if (window.location.pathname === '/admin' || window.location.pathname === '/admin/' || window.location.pathname === '/') {
+      window.history.replaceState(null, '', '/admin/dashboard');
     }
 
     return () => window.removeEventListener('popstate', handlePopState);
   }, [activeTab]);
 
   const navItems = [
+    { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
     { id: 'sms-reports', label: 'SMS Reports', icon: FileSpreadsheet },
     { id: 'sms', label: 'Live SMS Relay', icon: Radio },
     { id: 'client-filters', label: 'Clients CLI Filter', icon: ShieldAlert },
-    { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
     { id: 'providers', label: 'API Provider', icon: Server },
     { id: 'clients', label: 'Clients', icon: Users },
     { id: 'settings', label: 'Settings', icon: SettingsIcon },
