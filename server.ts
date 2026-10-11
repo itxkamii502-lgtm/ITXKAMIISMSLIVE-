@@ -520,6 +520,22 @@ app.post('/api/client-filters', requireAdmin, (req: AuthRequest, res: Response) 
   res.json({ success: true, rule: result.rule });
 });
 
+app.patch('/api/client-filters/:id', requireAdmin, (req: AuthRequest, res: Response) => {
+  const result = store.updateClientFilterRule(req.params.id, req.body);
+  if (result.error || !result.rule) {
+    return res.status(400).json({ error: result.error || 'Failed to update filter rule' });
+  }
+  res.json({ success: true, rule: result.rule, rules: store.getClientFilterRules() });
+});
+
+app.put('/api/client-filters/:id', requireAdmin, (req: AuthRequest, res: Response) => {
+  const result = store.updateClientFilterRule(req.params.id, req.body);
+  if (result.error || !result.rule) {
+    return res.status(400).json({ error: result.error || 'Failed to update filter rule' });
+  }
+  res.json({ success: true, rule: result.rule, rules: store.getClientFilterRules() });
+});
+
 app.patch('/api/client-filters/:id/toggle', requireAdmin, (req: AuthRequest, res: Response) => {
   const success = store.toggleClientFilterRule(req.params.id);
   if (!success) {
@@ -534,6 +550,16 @@ app.delete('/api/client-filters/:id', requireAdmin, (req: AuthRequest, res: Resp
     return res.status(404).json({ error: 'Filter rule not found' });
   }
   res.json({ success: true, rules: store.getClientFilterRules() });
+});
+
+// Range-level Blocked CLI Access Overrides
+app.post('/api/ranges/:id/cli-access', requireAdmin, (req: AuthRequest, res: Response) => {
+  const { allowedBlockedClis } = req.body || {};
+  const result = store.updateRangeAllowedBlockedClis(req.params.id, allowedBlockedClis || []);
+  if (!result.success) {
+    return res.status(400).json({ error: result.error || 'Failed to update range CLI access' });
+  }
+  res.json({ success: true, range: result.range, ranges: store.getRanges() });
 });
 
 // Partitions endpoints (Accessible to authenticated users for dropdowns)

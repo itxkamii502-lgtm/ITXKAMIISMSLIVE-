@@ -429,7 +429,7 @@ class Store {
     customLogoUrl: '',
     theme: 'emerald',
     darkMode: true,
-    clientSessionMinutes: 5,
+    clientSessionMinutes: 60,
     enableSoundByDefault: true,
     webhookToken: process.env.WEBHOOK_TOKEN || ('kbmax_' + crypto.randomBytes(12).toString('hex')),
     adminUsername: process.env.ADMIN_USERNAME || 'ITXKAMII',
@@ -495,8 +495,8 @@ class Store {
         cumulativeTotalSms: Math.max(this.cumulativeTotalSms, this.messages.length),
         clientClearedAt: this.clientClearedAt,
         clientClearedPart: Array.from(this.clientClearedPart.entries()),
-        messages: this.messages.slice(0, 3000),
-        seenFingerprints: Array.from(this.seenFingerprints.entries()).slice(-15000),
+        messages: this.messages.slice(0, 100000),
+        seenFingerprints: Array.from(this.seenFingerprints.entries()).slice(-50000),
       };
       fs.writeFileSync(DATA_FILE, JSON.stringify(payload, null, 2), 'utf-8');
     } catch (err) {
@@ -774,12 +774,10 @@ class Store {
           }
 
           const token = generateToken();
-          const sessionMinutes = (client.sessionMinutes && client.sessionMinutes > 0)
-            ? client.sessionMinutes
-            : (this.settings.clientSessionMinutes || 5);
-          const storageLimit = (client.storageLimit && client.storageLimit >= 500)
-            ? client.storageLimit
-            : (this.settings.clientMaxRetention && this.settings.clientMaxRetention >= 500 ? this.settings.clientMaxRetention : 500);
+          // Strictly adhere to Admin-configured fixed session duration for all clients
+          const sessionMinutes = Math.max(1, Math.min(1440, Number(this.settings.clientSessionMinutes) || 60));
+          // Universal client box capacity strictly configured by Admin for all clients (no client-specific override)
+          const storageLimit = Math.max(100, Math.min(50000, Number(this.settings.clientMaxRetention) || 500));
 
           const session: UserSession = {
             token,
@@ -962,9 +960,7 @@ class Store {
       ? data.allowedServices.slice(0, 50).map(s => sanitizeInputString(s, 64)).filter(Boolean)
       : ['*'];
 
-    const sessionMinutes = data.sessionMinutes && Number(data.sessionMinutes) > 0
-      ? Math.max(1, Math.min(1440, Number(data.sessionMinutes)))
-      : (this.settings.clientSessionMinutes || 5);
+    const sessionMinutes = Math.max(1, Math.min(1440, Number(this.settings.clientSessionMinutes) || 60));
 
     const storageLimit = data.storageLimit && Number(data.storageLimit) >= 500
       ? Math.max(500, Math.min(50000, Number(data.storageLimit)))
@@ -2088,8 +2084,8 @@ class Store {
       }
     }
 
-    // Admin retains full date-to-date database archive (up to 100,000)
-    const adminMaxRetention = Math.max(50000, this.settings.maxSmsRetention || 100000);
+    // Retain full historical archive safely up to 100,000+ so records are never missing
+    const adminMaxRetention = Math.max(100000, this.settings.maxSmsRetention || 100000);
     if (this.messages.length > adminMaxRetention) {
       this.messages.length = adminMaxRetention;
     }
@@ -2150,7 +2146,59 @@ class Store {
     const resolvedRangeName = (matchedRangeObj?.name || '').toLowerCase().trim();
     const rangePrefix = (matchedRangeObj?.prefix || '').toLowerCase().trim();
 
+    // Helper to test if this message belongs to or matches an allowed range identifier (name or id or prefix)
+    const isMessageInRange = (allowedRangeIdentifier: string): boolean => {
+      if (!allowedRangeIdentifier) return false;
+      const target = allowedRangeIdentifier.toLowerCase().trim();
+      if (!target) return false;
+
+      // Direct name or country string match
+      if (resolvedRangeName && (resolvedRangeName === target || resolvedRangeName.includes(target) || target.includes(resolvedRangeName))) {
+        return true;
+      }
+      if (rangeStr && (rangeStr === target || rangeStr.includes(target) || target.includes(rangeStr))) {
+        return true;
+      }
+      if (countryStr && (countryStr === target || countryStr.includes(target) || target.includes(countryStr))) {
+        return true;
+      }
+      if (matchedRangeObj) {
+        if (matchedRangeObj.id.toLowerCase() === target) return true;
+        if (matchedRangeObj.name.toLowerCase().trim() === target) return true;
+        if (matchedRangeObj.name.toLowerCase().includes(target) || target.includes(matchedRangeObj.name.toLowerCase())) return true;
+        if (matchedRangeObj.countryNote && matchedRangeObj.countryNote.toLowerCase().includes(target)) return true;
+      }
+
+      // Check if target is a range ID or range name in this.ranges
+      const targetRangeObj = this.ranges.get(target) ||
+        Array.from(this.ranges.values()).find(r => 
+          r.id.toLowerCase() === target || 
+          r.name.toLowerCase().trim() === target ||
+          r.name.toLowerCase().includes(target)
+        );
+      if (targetRangeObj) {
+        if (matchedRangeObj && matchedRangeObj.id === targetRangeObj.id) return true;
+        if (phoneClean && Array.isArray(targetRangeObj.numbers)) {
+          if (targetRangeObj.numbers.some(n => this.normalizePhoneDigits(n) === phoneClean)) return true;
+        }
+        if (targetRangeObj.prefix && phoneClean.startsWith(targetRangeObj.prefix.toLowerCase().replace(/[^\d]/g, ''))) return true;
+      }
+
+      return false;
+    };
+
     for (const rule of rules) {
+      // --- USER REQUIREMENT: TARGET RANGE SPECIFICITY ---
+      // If a rule is specified for specific target ranges, it strictly applies ONLY to messages belonging to those target ranges.
+      // Messages from any other range or country are NOT stopped or blocked by this rule!
+      if (Array.isArray(rule.targetRanges) && rule.targetRanges.length > 0) {
+        const isTargetedToMessageRange = rule.targetRanges.some(r => isMessageInRange(r));
+        if (!isTargetedToMessageRange) {
+          // Message is NOT from one of the targeted ranges -> do NOT block!
+          continue;
+        }
+      }
+
       const rawPattern = (rule.pattern || '').trim();
       if (!rawPattern) continue;
 
@@ -2172,7 +2220,18 @@ class Store {
           return clean.includes(pattern);
         };
 
-        if (rule.type === 'cli') {
+        let ruleMatched = false;
+
+        if (rule.type === 'app') {
+          // Explicit App / Service blocking (e.g. WhatsApp, Google, Telegram)
+          if (
+            checkMatch(serviceStr) ||
+            checkMatch(senderStr) ||
+            checkMatch(cliStr)
+          ) {
+            ruleMatched = true;
+          }
+        } else if (rule.type === 'cli') {
           // Matches CLI, Sender ID, Service/App Name, or Phone
           if (
             checkMatch(cliStr) ||
@@ -2181,7 +2240,7 @@ class Store {
             checkMatch(phoneClean) ||
             checkMatch(phoneRaw)
           ) {
-            return true;
+            ruleMatched = true;
           }
         } else if (rule.type === 'sms_body') {
           // Matches SMS Body, OTP
@@ -2189,7 +2248,7 @@ class Store {
             checkMatch(bodyLower) ||
             checkMatch(otpLower)
           ) {
-            return true;
+            ruleMatched = true;
           }
         } else if (rule.type === 'range') {
           // Matches Range name, Country, resolved range name, prefix, or phone prefix
@@ -2201,15 +2260,18 @@ class Store {
             (rangePrefix && checkMatch(rangePrefix)) ||
             (digitOnlyPattern.length >= 2 && phoneClean.startsWith(digitOnlyPattern))
           ) {
-            return true;
+            ruleMatched = true;
           }
-          // Also check if any configured range whose name matches this pattern contains the message's phone
-          for (const rng of this.ranges.values()) {
-            const rngName = (rng.name || '').toLowerCase().trim();
-            if (rngName && (rngName.includes(pattern) || pattern.includes(rngName))) {
-              if (Array.isArray(rng.numbers) && phoneClean) {
-                if (rng.numbers.some(n => this.normalizePhoneDigits(n) === phoneClean)) {
-                  return true;
+          if (!ruleMatched) {
+            // Also check if any configured range whose name matches this pattern contains the message's phone
+            for (const rng of this.ranges.values()) {
+              const rngName = (rng.name || '').toLowerCase().trim();
+              if (rngName && (rngName.includes(pattern) || pattern.includes(rngName))) {
+                if (Array.isArray(rng.numbers) && phoneClean) {
+                  if (rng.numbers.some(n => this.normalizePhoneDigits(n) === phoneClean)) {
+                    ruleMatched = true;
+                    break;
+                  }
                 }
               }
             }
@@ -2231,8 +2293,42 @@ class Store {
             checkMatch(phoneClean) ||
             checkMatch(phoneRaw)
           ) {
-            return true;
+            ruleMatched = true;
           }
+        }
+
+        if (ruleMatched) {
+          // --- RANGE ACCESS EXCEPTION ---
+          // "agr admin agr cli blouck hone k bawajod kisi rang ko acces dena chaiye us rang pr blouck chez is pr work kre"
+          // If this rule has allowedRanges configured and this message belongs to one of those ranges:
+          if (Array.isArray(rule.allowedRanges) && rule.allowedRanges.length > 0) {
+            const isAllowedOnThisRange = rule.allowedRanges.some(r => isMessageInRange(r));
+            if (isAllowedOnThisRange) {
+              // Bypass block! The blocked CLI works on this allowed range!
+              continue;
+            }
+          }
+
+          // Also check if the matched range itself explicitly allows this blocked pattern/CLI:
+          if (matchedRangeObj && Array.isArray(matchedRangeObj.allowedBlockedClis) && matchedRangeObj.allowedBlockedClis.length > 0) {
+            const isAllowedByRange = matchedRangeObj.allowedBlockedClis.some(allowedPattern => {
+              const ap = allowedPattern.toLowerCase().trim();
+              if (!ap) return false;
+              return (
+                cliStr === ap || cliStr.includes(ap) ||
+                senderStr === ap || senderStr.includes(ap) ||
+                serviceStr === ap || serviceStr.includes(ap) ||
+                pattern === ap || pattern.includes(ap) || ap.includes(pattern)
+              );
+            });
+            if (isAllowedByRange) {
+              // Bypass block!
+              continue;
+            }
+          }
+
+          // Rule matched and is not bypassed: message is blocked!
+          return true;
         }
       }
     }
@@ -2245,10 +2341,13 @@ class Store {
   }
 
   public addClientFilterRule(data: {
-    type: 'cli' | 'sms_body' | 'range' | 'all';
+    type?: 'app' | 'cli' | 'sms_body' | 'range' | 'all';
     pattern: string;
     matchType?: 'exact' | 'contains' | 'starts_with';
     notes?: string;
+    scope?: 'all' | 'specific_ranges';
+    targetRanges?: string[];
+    allowedRanges?: string[];
   }): { rule?: ClientFilterRule; error?: string } {
     const pattern = (data.pattern || '').trim();
     if (!pattern) {
@@ -2263,6 +2362,13 @@ class Store {
       matchType: data.matchType || 'contains',
       enabled: true,
       notes: (data.notes || '').trim(),
+      scope: data.scope || (Array.isArray(data.targetRanges) && data.targetRanges.length > 0 ? 'specific_ranges' : 'all'),
+      targetRanges: Array.isArray(data.targetRanges)
+        ? data.targetRanges.map(s => String(s).trim()).filter(Boolean)
+        : [],
+      allowedRanges: Array.isArray(data.allowedRanges)
+        ? data.allowedRanges.map(s => String(s).trim()).filter(Boolean)
+        : [],
       createdAt: Date.now(),
     };
 
@@ -2276,6 +2382,68 @@ class Store {
     this.scheduleSave();
     this.notifyFilterRulesChanged();
     return { rule };
+  }
+
+  public updateClientFilterRule(id: string, data: {
+    type?: 'app' | 'cli' | 'sms_body' | 'range' | 'all';
+    pattern?: string;
+    matchType?: 'exact' | 'contains' | 'starts_with';
+    notes?: string;
+    enabled?: boolean;
+    scope?: 'all' | 'specific_ranges';
+    targetRanges?: string[];
+    allowedRanges?: string[];
+  }): { rule?: ClientFilterRule; error?: string } {
+    const rule = this.clientFilterRules.get(id);
+    if (!rule) return { error: 'Filter rule not found' };
+
+    if (data.type !== undefined) rule.type = data.type;
+    if (data.pattern !== undefined) {
+      const p = data.pattern.trim();
+      if (!p) return { error: 'Pattern cannot be empty' };
+      rule.pattern = p;
+    }
+    if (data.matchType !== undefined) rule.matchType = data.matchType;
+    if (data.notes !== undefined) rule.notes = data.notes.trim();
+    if (data.enabled !== undefined) rule.enabled = Boolean(data.enabled);
+    if (data.scope !== undefined) rule.scope = data.scope;
+    if (data.targetRanges !== undefined) {
+      rule.targetRanges = Array.isArray(data.targetRanges)
+        ? data.targetRanges.map(s => String(s).trim()).filter(Boolean)
+        : [];
+    }
+    if (data.allowedRanges !== undefined) {
+      rule.allowedRanges = Array.isArray(data.allowedRanges)
+        ? data.allowedRanges.map(s => String(s).trim()).filter(Boolean)
+        : [];
+    }
+
+    // Re-evaluate existing messages
+    for (const m of this.messages) {
+      m.isClientBlocked = this.isMessageBlockedForClients(m);
+    }
+
+    this.scheduleSave();
+    this.notifyFilterRulesChanged();
+    return { rule };
+  }
+
+  public updateRangeAllowedBlockedClis(rangeId: string, allowedBlockedClis: string[]): { success: boolean; range?: NumberRange; error?: string } {
+    const range = this.ranges.get(rangeId);
+    if (!range) return { success: false, error: 'Range not found' };
+
+    range.allowedBlockedClis = Array.isArray(allowedBlockedClis)
+      ? allowedBlockedClis.map(s => String(s).trim()).filter(Boolean)
+      : [];
+    range.updatedAt = Date.now();
+
+    // Re-evaluate existing messages
+    for (const m of this.messages) {
+      m.isClientBlocked = this.isMessageBlockedForClients(m);
+    }
+
+    this.scheduleSave();
+    return { success: true, range };
   }
 
   public toggleClientFilterRule(id: string): boolean {
@@ -2380,20 +2548,12 @@ class Store {
     }
 
     // Capacity buffer calculation:
-    // If client role: bounded by specific client storageLimit or clientMaxRetention (FIFO rolling window, minimum 500)
+    // If client role: universal fixed clientMaxRetention set by Admin (FIFO rolling window, minimum 100)
     let effectiveLimit: number;
     if (role === 'client') {
-      let clientCap = 500;
-      if (clientId) {
-        const clientObj = this.clients.get(clientId);
-        if (clientObj?.storageLimit && clientObj.storageLimit >= 500) {
-          clientCap = clientObj.storageLimit;
-        } else if (this.settings.clientMaxRetention && this.settings.clientMaxRetention >= 500) {
-          clientCap = this.settings.clientMaxRetention;
-        }
-      } else if (this.settings.clientMaxRetention && this.settings.clientMaxRetention >= 500) {
-        clientCap = this.settings.clientMaxRetention;
-      }
+      const clientCap = (this.settings.clientMaxRetention && this.settings.clientMaxRetention >= 100)
+        ? this.settings.clientMaxRetention
+        : 500;
       effectiveLimit = limit && limit > 0 ? Math.min(limit, clientCap) : clientCap;
     } else {
       // Admin role: sees full permanent archive
@@ -2495,13 +2655,11 @@ class Store {
   public updateSettings(newSettings: Partial<SiteSettings>): SiteSettings {
     Object.assign(this.settings, newSettings);
     if (newSettings.maxSmsRetention && newSettings.maxSmsRetention > 0) {
-      this.settings.maxSmsRetention = Math.max(100, Math.min(50000, newSettings.maxSmsRetention));
-      if (this.messages.length > this.settings.maxSmsRetention) {
-        this.messages.length = this.settings.maxSmsRetention;
-      }
+      this.settings.maxSmsRetention = Math.max(100, Math.min(100000, newSettings.maxSmsRetention));
+      // NOTE: Never truncate this.messages. Historical SMS records stay permanently preserved.
     }
     if (newSettings.clientMaxRetention && newSettings.clientMaxRetention > 0) {
-      this.settings.clientMaxRetention = Math.max(10, Math.min(50000, newSettings.clientMaxRetention));
+      this.settings.clientMaxRetention = Math.max(100, Math.min(50000, newSettings.clientMaxRetention));
     }
     this.scheduleSave();
     return this.getSettings();
@@ -2779,20 +2937,12 @@ class Store {
     // Normal mode: attach resolved rangeName & true country to each message dynamically
     let maxAllowed: number;
     if (params.role === 'client') {
-      let clientBoxLimit = 500;
-      if (params.clientId) {
-        const clientObj = this.clients.get(params.clientId);
-        if (clientObj?.storageLimit && clientObj.storageLimit >= 500) {
-          clientBoxLimit = clientObj.storageLimit;
-        } else if (this.settings.clientMaxRetention && this.settings.clientMaxRetention >= 500) {
-          clientBoxLimit = this.settings.clientMaxRetention;
-        }
-      } else if (this.settings.clientMaxRetention && this.settings.clientMaxRetention >= 500) {
-        clientBoxLimit = this.settings.clientMaxRetention;
-      }
+      const clientBoxLimit = (this.settings.clientMaxRetention && this.settings.clientMaxRetention >= 100)
+        ? this.settings.clientMaxRetention
+        : 500;
       maxAllowed = params.limit ? Math.min(params.limit, clientBoxLimit) : clientBoxLimit;
     } else {
-      maxAllowed = params.limit || 50000;
+      maxAllowed = params.limit || 100000;
     }
 
     const resolvedMessages = list.slice(0, maxAllowed).map(m => {

@@ -60,17 +60,26 @@ export const BrandLogo: React.FC<BrandLogoProps> = ({
                 : size === 'lg'
                 ? 'max-h-20 max-w-[220px] p-1.5 shadow-lg'
                 : 'max-h-14 max-w-[180px] p-1 shadow-md'
-            } w-auto object-contain rounded-2xl border-2 border-blue-500/40 bg-slate-950/90`}
+            } w-auto object-contain rounded-2xl border-2 border-emerald-500/40 bg-slate-950/90 shadow-emerald-950/50`}
           />
           <span className="absolute -top-1.5 -right-1.5 w-3.5 h-3.5 rounded-full bg-emerald-400 animate-ping" />
           <span className="absolute -top-1.5 -right-1.5 w-3.5 h-3.5 rounded-full bg-emerald-500 shadow-md ring-2 ring-white/50" />
         </div>
       ) : (
         <div className="relative shrink-0 flex items-center justify-center">
+          {/* Dual-color Green & Red flag palette emblem */}
           <div
-            className={`${iconSizes[size]} rounded-3xl bg-gradient-to-br from-blue-950 via-slate-900 to-emerald-950 border-2 border-blue-500/50 flex items-center justify-center shadow-2xl shadow-blue-500/25 relative overflow-hidden group`}
+            className={`${iconSizes[size]} rounded-3xl relative overflow-hidden flex items-center justify-center shadow-2xl shadow-emerald-950/60 border-2 border-white/20 p-1 group`}
           >
-            <div className="absolute inset-0 bg-gradient-to-tr from-emerald-500/20 to-blue-500/20 opacity-80 group-hover:opacity-100 transition-opacity" />
+            {/* Top/Left emerald green half */}
+            <div className="absolute inset-0 bg-gradient-to-br from-emerald-600 via-emerald-700 to-transparent z-0" />
+            {/* Bottom/Right ruby red half */}
+            <div className="absolute inset-0 bg-gradient-to-tl from-red-600 via-red-700 to-transparent opacity-90 z-0" />
+            
+            {/* Fine metallic diagonal divider & aura */}
+            <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,rgba(255,255,255,0.18),transparent_70%)] z-0" />
+            
+            {/* Central icon */}
             <Radio 
               className={`${
                 size === 'sm' 
@@ -82,7 +91,7 @@ export const BrandLogo: React.FC<BrandLogoProps> = ({
                   : size === '2xl' 
                   ? 'w-14 h-14 sm:w-18 sm:h-18' 
                   : 'w-6 h-6'
-              } text-emerald-400 relative z-10 animate-pulse drop-shadow-[0_0_12px_rgba(16,185,129,0.6)]`} 
+              } text-white relative z-10 animate-pulse drop-shadow-[0_0_14px_rgba(255,255,255,0.8)]`} 
             />
           </div>
           <span className="absolute -top-1 -right-1 w-3.5 h-3.5 rounded-full bg-emerald-400 animate-ping" />
@@ -92,10 +101,10 @@ export const BrandLogo: React.FC<BrandLogoProps> = ({
 
       <div className={`flex flex-col min-w-0 ${isVertical ? 'items-center text-center' : ''}`}>
         <div className="flex items-center justify-center gap-2.5">
-          <span className={`${textSizes[size]} uppercase font-black font-sans bg-gradient-to-r from-white via-emerald-300 to-blue-400 bg-clip-text text-transparent drop-shadow-md truncate`}>
+          <span className={`${textSizes[size]} uppercase font-black font-sans bg-gradient-to-r from-emerald-400 via-white to-red-500 bg-clip-text text-transparent drop-shadow-md truncate`}>
             {siteName}
           </span>
-          <span className="px-2.5 py-0.5 rounded-md text-[11px] font-black uppercase tracking-wider bg-gradient-to-r from-emerald-500/20 to-blue-500/20 text-emerald-300 border border-emerald-400/40 shrink-0 shadow-xs">
+          <span className="px-2.5 py-0.5 rounded-md text-[11px] font-black uppercase tracking-wider bg-gradient-to-r from-emerald-500/20 to-red-500/20 text-emerald-300 border border-emerald-400/40 shrink-0 shadow-xs">
             LIVE
           </span>
         </div>

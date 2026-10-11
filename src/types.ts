@@ -50,6 +50,7 @@ export interface NumberRange {
   totalNumbers: number;
   createdAt: number;
   updatedAt?: number;
+  allowedBlockedClis?: string[]; // Specific blocked CLIs/patterns granted access to work on this range
 }
 
 export interface ApiProviderMapping {
@@ -112,12 +113,15 @@ export interface SmsMessage {
 
 export interface ClientFilterRule {
   id: string;
-  type: 'cli' | 'sms_body' | 'range' | 'all';
+  type: 'app' | 'cli' | 'sms_body' | 'range' | 'all';
   pattern: string;
   matchType?: 'exact' | 'contains' | 'starts_with';
   enabled: boolean;
   notes?: string;
   createdAt: number;
+  scope?: 'all' | 'specific_ranges'; // 'all' = blocks globally on all ranges; 'specific_ranges' = only blocks on targetRanges
+  targetRanges?: string[]; // Specific ranges where this app/CLI/rule is strictly blocked (does not stop for any other range or country)
+  allowedRanges?: string[]; // Range names or IDs that have ACCESS even if this rule matches (Bypasses block for these ranges)
 }
 
 export type ThemePreset = 'emerald' | 'cyan' | 'sapphire' | 'violet' | 'amber' | 'crimson';

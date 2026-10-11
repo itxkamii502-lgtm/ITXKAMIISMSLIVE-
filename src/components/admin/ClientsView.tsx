@@ -25,6 +25,19 @@ import { useAuth } from '../../context/AuthContext';
 import { THEMES } from '../../utils/theme';
 import type { ClientAccount } from '../../types';
 
+function formatLifetimeDateTime(timestamp?: number): string {
+  if (!timestamp) return 'No Activity Recorded';
+  const d = new Date(timestamp);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const yyyy = d.getFullYear();
+  const mm = pad(d.getMonth() + 1);
+  const dd = pad(d.getDate());
+  const hh = pad(d.getHours());
+  const min = pad(d.getMinutes());
+  const ss = pad(d.getSeconds());
+  return `${yyyy}-${mm}-${dd} ${hh}:${min}:${ss}`;
+}
+
 function formatLastSeen(timestamp?: number): { relative: string; full: string; isRecent: boolean } {
   if (!timestamp) return { relative: 'Never', full: 'No activity recorded', isRecent: false };
   const diffSec = Math.max(0, Math.floor((Date.now() - timestamp) / 1000));
@@ -100,7 +113,7 @@ export const ClientsView: React.FC = () => {
       notes: '',
       status: 'active',
       maxConcurrentSessions: 3,
-      sessionMinutes: settings?.clientSessionMinutes || 5,
+      sessionMinutes: settings?.clientSessionMinutes || 60,
       storageLimit: 500,
     });
     setIsModalOpen(true);
@@ -116,7 +129,7 @@ export const ClientsView: React.FC = () => {
       notes: c.notes || '',
       status: c.status,
       maxConcurrentSessions: c.maxConcurrentSessions || 3,
-      sessionMinutes: c.sessionMinutes || settings?.clientSessionMinutes || 5,
+      sessionMinutes: settings?.clientSessionMinutes || c.sessionMinutes || 60,
       storageLimit: c.storageLimit || 500,
     });
     setIsModalOpen(true);
@@ -372,7 +385,7 @@ export const ClientsView: React.FC = () => {
             <h3 className="text-sm font-bold text-white">Registered Clients ({clients.length})</h3>
           </div>
           <span className="text-[11px] text-slate-400 font-mono">
-            Auto-Logout: {settings?.clientSessionMinutes || 5} min session limit
+            Session Duration: {settings?.clientSessionMinutes || 60} min (Fixed by Admin)
           </span>
         </div>
 
@@ -394,7 +407,7 @@ export const ClientsView: React.FC = () => {
                   <th className="py-3 px-4">Allowed Services</th>
                   <th className="py-3 px-4">Session & Box Limit</th>
                   <th className="py-3 px-4">Status & Sessions</th>
-                  <th className="py-3 px-4">Last Active & Panel Opens</th>
+                  <th className="py-3 px-4">Lifetime Last Active & Opens</th>
                   <th className="py-3 px-4">Created Date</th>
                   <th className="py-3 px-4 text-right">Actions</th>
                 </tr>
@@ -460,10 +473,10 @@ export const ClientsView: React.FC = () => {
                         <div className="space-y-1">
                           <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-blue-500/10 text-blue-300 border border-blue-500/20 text-[10px] font-bold">
                             <Clock className="w-3 h-3 text-blue-400" />
-                            <span>{c.sessionMinutes || 5} min session</span>
+                            <span>{settings?.clientSessionMinutes || c.sessionMinutes || 5} min session</span>
                           </span>
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-amber-500/10 text-amber-300 border border-amber-500/20 text-[10px] font-bold">
-                            <span>📦 {(c.storageLimit || 500).toLocaleString()} OTP Box</span>
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-amber-500/10 text-amber-300 border border-amber-500/20 text-[10px] font-bold" title="Universal Client OTP Box Capacity fixed by Admin">
+                            <span>📦 {(settings?.clientMaxRetention || 500).toLocaleString()} OTP Box (Universal)</span>
                           </span>
                         </div>
                       </td>
@@ -574,53 +587,47 @@ export const ClientsView: React.FC = () => {
                         })()}
                       </td>
 
-                      {/* Last Active & Panel Opens */}
+                      {/* Lifetime Last Active & Panel Opens */}
                       <td className="py-3.5 px-4">
                         {(() => {
                           const lastActive = formatLastSeen(c.lastActive);
                           const openCount = c.panelOpenCount || 0;
+                          const isOnline = lastActive.isRecent;
 
                           return (
-                            <div className="space-y-1">
+                            <div className="space-y-1.5">
                               <div className="flex items-center gap-1.5 flex-wrap">
                                 <span
                                   className={`w-2 h-2 rounded-full shrink-0 ${
-                                    lastActive.isRecent
+                                    isOnline
                                       ? 'bg-emerald-400 animate-ping'
                                       : c.lastActive
                                       ? 'bg-emerald-400'
                                       : 'bg-slate-600'
                                   }`}
                                 />
-                                <span
-                                  className={`text-xs font-mono font-bold ${
-                                    lastActive.isRecent
-                                      ? 'text-emerald-300'
-                                      : c.lastActive
-                                      ? 'text-slate-200'
-                                      : 'text-slate-500'
-                                  }`}
-                                  title={lastActive.full}
-                                >
-                                  {lastActive.relative}
+                                <span className="text-[10px] font-mono font-bold tracking-wider text-emerald-400 px-1.5 py-0.5 rounded bg-emerald-950/80 border border-emerald-500/40">
+                                  Lifetime
                                 </span>
+                                {isOnline && (
+                                  <span className="text-[10.5px] font-bold text-emerald-300 font-mono">
+                                    Active Now
+                                  </span>
+                                )}
                                 <span
-                                  className="px-1.5 py-0.2 rounded bg-indigo-500/15 border border-indigo-500/30 text-indigo-300 text-[10px] font-mono font-bold"
+                                  className="px-1.5 py-0.5 rounded bg-indigo-500/15 border border-indigo-500/30 text-indigo-300 text-[10px] font-mono font-bold"
                                   title="Total times this client opened the panel"
                                 >
                                   {openCount} {openCount === 1 ? 'open' : 'opens'}
                                 </span>
                               </div>
                               {c.lastActive ? (
-                                <div className="text-[10px] text-slate-400 font-mono flex items-center gap-1">
-                                  <Clock className="w-2.5 h-2.5 text-slate-500 shrink-0" />
-                                  <span>
-                                    {new Date(c.lastActive).toLocaleDateString([], { month: 'short', day: 'numeric' })} at{' '}
-                                    {new Date(c.lastActive).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
-                                  </span>
+                                <div className="text-xs text-slate-200 font-mono font-semibold flex items-center gap-1.5">
+                                  <Clock className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                                  <span>{formatLifetimeDateTime(c.lastActive)}</span>
                                 </div>
                               ) : (
-                                <span className="text-[10px] text-slate-500 font-mono">No sessions yet</span>
+                                <span className="text-[10px] text-slate-500 font-mono">Lifetime: No Activity Recorded</span>
                               )}
                             </div>
                           );
@@ -847,31 +854,25 @@ export const ClientsView: React.FC = () => {
                     max="1440"
                     required
                     value={formData.sessionMinutes}
-                    onChange={(e) => setFormData({ ...formData, sessionMinutes: Math.max(1, parseInt(e.target.value) || 5) })}
+                    onChange={(e) => setFormData({ ...formData, sessionMinutes: Math.max(1, parseInt(e.target.value) || settings?.clientSessionMinutes || 60) })}
                     className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded-xl text-white font-mono"
                   />
-                  <p className="text-[10px] text-slate-400 mt-1">
-                    Default 5 min auto-logout.
+                  <p className="text-[10px] text-emerald-400 mt-1">
+                    Uniformly fixed by Admin in Settings ({settings?.clientSessionMinutes || 60} min).
                   </p>
                 </div>
 
-                {/* Storage Capacity */}
+                {/* Universal OTP Box Capacity */}
                 <div>
                   <label className="block font-semibold text-slate-300 mb-1 flex items-center gap-1">
-                    <span>📦 Storage Box (Min 500)</span>
+                    <span>📦 Universal OTP Box</span>
                   </label>
-                  <input
-                    type="number"
-                    min="500"
-                    max="50000"
-                    step="50"
-                    required
-                    value={formData.storageLimit}
-                    onChange={(e) => setFormData({ ...formData, storageLimit: Math.max(500, parseInt(e.target.value) || 500) })}
-                    className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded-xl text-white font-mono"
-                  />
-                  <p className="text-[10px] text-amber-400/90 mt-1">
-                    Max OTPs kept in client inbox (FIFO buffer).
+                  <div className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded-xl text-emerald-400 font-mono text-xs flex items-center justify-between">
+                    <span className="font-bold">{(settings?.clientMaxRetention || 500).toLocaleString()} OTP Box</span>
+                    <span className="text-[10px] text-slate-400 font-sans">Admin Fixed</span>
+                  </div>
+                  <p className="text-[10px] text-slate-400 mt-1">
+                    Uniform for all clients, configured globally by Admin in Settings.
                   </p>
                 </div>
               </div>

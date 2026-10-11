@@ -38,6 +38,8 @@ export const SettingsView: React.FC = () => {
 
   // Live SMS Retention Limit
   const [maxSmsRetention, setMaxSmsRetention] = useState<number>(settings?.maxSmsRetention || 2000);
+  // Universal Client OTP Box Capacity (Uniformly fixed by Admin for all clients)
+  const [clientMaxRetention, setClientMaxRetention] = useState<number>(settings?.clientMaxRetention || 500);
 
   // Live SMS Table & Font Color Styling
   const [smsTableBgColor, setSmsTableBgColor] = useState<string>(settings?.smsTableBgColor || '#090d16');
@@ -165,24 +167,31 @@ export const SettingsView: React.FC = () => {
     setNotice(null);
 
     const targetLimit = Number(maxSmsRetention) || 2000;
-    if (targetLimit < 100 || targetLimit > 50000) {
-      setNotice({ type: 'error', message: 'SMS retention limit must be between 100 and 50,000.' });
+    const targetClientBox = Number(clientMaxRetention) || 500;
+    if (targetLimit < 100 || targetLimit > 100000) {
+      setNotice({ type: 'error', message: 'Live SMS retention limit must be between 100 and 100,000.' });
+      setIsSaving(false);
+      return;
+    }
+    if (targetClientBox < 100 || targetClientBox > 50000) {
+      setNotice({ type: 'error', message: 'Client box capacity must be between 100 and 50,000.' });
       setIsSaving(false);
       return;
     }
 
     const success = await updateSettings({
       maxSmsRetention: targetLimit,
+      clientMaxRetention: targetClientBox,
     });
 
     setIsSaving(false);
     if (success) {
       setNotice({ 
         type: 'success', 
-        message: `Live SMS memory buffer limit updated to ${targetLimit.toLocaleString()} messages! Older SMS will only be rolled over once this count is reached.` 
+        message: `Live SMS memory buffer limit set to ${targetLimit.toLocaleString()} SMS and Universal Client OTP Box Capacity set to ${targetClientBox.toLocaleString()} SMS for all clients! Records remain safely preserved.` 
       });
     } else {
-      setNotice({ type: 'error', message: 'Failed to update Live SMS retention limit' });
+      setNotice({ type: 'error', message: 'Failed to update retention and client box settings.' });
     }
   };
 
@@ -581,6 +590,64 @@ pm2 save
               </div>
             </div>
 
+            {/* Universal Client OTP Box Capacity Section */}
+            <div className="border-t border-slate-800 pt-4 space-y-3">
+              <div>
+                <label className="block font-semibold text-white mb-1 flex items-center gap-1.5 text-xs">
+                  <span>📦 Universal Client OTP Box Capacity</span>
+                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-950/80 text-amber-400 border border-amber-500/30 font-mono">
+                    Fixed for All Clients
+                  </span>
+                </label>
+                <p className="text-[11px] text-slate-400">
+                  Strictly fixes the OTP inbox capacity uniformly for every client. No individual client can expand or customize their own box limit.
+                </p>
+              </div>
+
+              {/* Box Quick Presets */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                {[
+                  { count: 500, label: '500 OTP Box', note: 'Standard Universal' },
+                  { count: 1000, label: '1,000 OTP Box', note: 'Medium Universal' },
+                  { count: 2000, label: '2,000 OTP Box', note: 'Expanded' },
+                  { count: 5000, label: '5,000 OTP Box', note: 'High Volume' },
+                ].map((preset) => {
+                  const isSelected = Number(clientMaxRetention) === preset.count;
+                  return (
+                    <button
+                      key={preset.count}
+                      type="button"
+                      onClick={() => setClientMaxRetention(preset.count)}
+                      className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
+                        isSelected
+                          ? 'bg-amber-950/80 border-amber-500 text-amber-300 ring-2 ring-amber-500/20'
+                          : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-white hover:border-slate-700'
+                      }`}
+                    >
+                      <div className="font-mono font-bold text-xs">{preset.label}</div>
+                      <div className="text-[10px] text-slate-500">{preset.note}</div>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Custom Numeric Client Box */}
+              <div className="flex items-center gap-3 pt-1">
+                <input
+                  type="number"
+                  min={100}
+                  max={50000}
+                  step={100}
+                  value={clientMaxRetention}
+                  onChange={(e) => setClientMaxRetention(Number(e.target.value))}
+                  className="w-48 px-3.5 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-white font-mono font-bold text-sm focus:outline-none focus:border-amber-500"
+                />
+                <span className="text-xs text-slate-400 font-mono">
+                  Fixed Client Box: <strong className="text-amber-400">{Number(clientMaxRetention).toLocaleString()}</strong> OTPs
+                </span>
+              </div>
+            </div>
+
             {/* Save Button */}
             <div className="pt-2">
               <button
@@ -590,7 +657,7 @@ pm2 save
                 className="px-6 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold transition-all shadow-lg shadow-emerald-950/40 active:scale-95 cursor-pointer disabled:opacity-50 flex items-center gap-2"
               >
                 <Radio className="w-3.5 h-3.5" />
-                <span>{isSaving ? 'Updating Buffer...' : 'Save SMS Retention Limit'}</span>
+                <span>{isSaving ? 'Updating Settings...' : 'Save Buffer & Universal Box Settings'}</span>
               </button>
             </div>
           </div>
@@ -787,22 +854,24 @@ pm2 save
             <div className="border-t border-slate-800 pt-4 max-w-lg">
               <div className="flex items-center gap-2 mb-1">
                 <Clock className="w-4 h-4 text-emerald-400" />
-                <label className="font-semibold text-slate-300 text-xs">
-                  Client Auto-Logout Session Timer (Minutes)
+                <label className="font-semibold text-slate-200 text-xs">
+                  Fixed Client Session Duration (Minutes)
                 </label>
               </div>
               <p className="text-[11px] text-slate-400 mb-2">
-                Strictly enforced on the server. Clients will be forcefully logged out when this timer expires.
+                Uniformly fixed by Admin for all clients. Every client session will strictly adhere to this exact duration.
               </p>
-              <input
-                type="number"
-                min={1}
-                max={120}
-                value={clientSessionMinutes}
-                onChange={(e) => setClientSessionMinutes(Number(e.target.value))}
-                className="w-32 px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-white font-mono text-sm font-bold"
-              />
-              <span className="ml-2 text-xs text-slate-400">Minutes (Default: 5 min)</span>
+              <div className="flex items-center gap-2">
+                <input
+                  type="number"
+                  min={1}
+                  max={1440}
+                  value={clientSessionMinutes}
+                  onChange={(e) => setClientSessionMinutes(Math.max(1, Math.min(1440, Number(e.target.value) || 1)))}
+                  className="w-32 px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-white font-mono text-sm font-bold focus:outline-none focus:border-emerald-500"
+                />
+                <span className="text-xs text-slate-300 font-medium">Minutes</span>
+              </div>
             </div>
 
             <button

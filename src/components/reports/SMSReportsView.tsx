@@ -149,8 +149,8 @@ export const SMSReportsView: React.FC<SMSReportsViewProps> = ({ embeddedInClient
   const [totalCount, setTotalCount] = useState<number>(0);
   const [filteredCount, setFilteredCount] = useState<number>(0);
 
-  // Synchronized Buffer Capacity / Limit (50, 100, 150, 500, 1000, 5000, 10000, All)
-  const [capacityLimit, setCapacityLimit] = useState<number | 'all'>(1000);
+  // Query result limit ('all' by default to load all matched historical reports)
+  const [capacityLimit, setCapacityLimit] = useState<number | 'all'>('all');
   const [showClearModal, setShowClearModal] = useState<boolean>(false);
   const [clearTarget, setClearTarget] = useState<'client' | 'table' | 'all'>('client');
   const [isClearing, setIsClearing] = useState<boolean>(false);
@@ -251,28 +251,6 @@ export const SMSReportsView: React.FC<SMSReportsViewProps> = ({ embeddedInClient
       setIsLoading(false);
     }
   }, [session, fromDateStr, toDateStr, selectedRange, numberFilter, cliFilter, groupBy, tableSearch, capacityLimit]);
-
-  // Synchronize capacity / retention limit with Live SMS gateway settings
-  const handleCapacityChange = async (newLimit: number | 'all') => {
-    setCapacityLimit(newLimit);
-    if (!session) return;
-    try {
-      const capNum = newLimit === 'all' ? 50000 : newLimit;
-      await fetch('/api/settings', {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${session.token}`,
-        },
-        body: JSON.stringify({
-          clientMaxRetention: capNum,
-          maxSmsRetention: capNum,
-        }),
-      });
-    } catch {
-      // Ignore
-    }
-  };
 
   // Clear Logs handler (Support clearing client logs, table, or master buffer)
   const handleConfirmClear = async () => {
@@ -563,13 +541,13 @@ export const SMSReportsView: React.FC<SMSReportsViewProps> = ({ embeddedInClient
           </div>
         )}
 
-        {/* MAIN FILTER CARD: Side-by-side inputs (From & To in Row 1, Range, CLI, Number in Row 2) */}
-        <div className="bg-white border border-slate-200/90 rounded-3xl p-4 sm:p-5 shadow-xs space-y-4">
-          <form onSubmit={(e) => { e.preventDefault(); handleShowReport(); }} className="space-y-4">
-            {/* Inputs Grid: Row 1 = From & To (Horizontally side-by-side in one row) */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
-              <div>
-                <label className="block text-xs font-serif text-slate-500 mb-1">
+        {/* MAIN FILTER CARD: Optimized layout matching user specifications */}
+        <div className="bg-white border border-slate-200/90 rounded-3xl p-3.5 sm:p-5 shadow-xs space-y-3 sm:space-y-3.5">
+          <form onSubmit={(e) => { e.preventDefault(); handleShowReport(); }} className="space-y-3">
+            {/* Row 1: Date to Date in a single row (Mobile & Desktop) */}
+            <div className="flex items-center gap-2 sm:gap-3 w-full">
+              <div className="flex-1 min-w-0">
+                <label className="block text-[11px] sm:text-xs font-serif text-slate-500 mb-0.5 sm:mb-1">
                   From
                 </label>
                 <input
@@ -577,12 +555,16 @@ export const SMSReportsView: React.FC<SMSReportsViewProps> = ({ embeddedInClient
                   value={fromDateStr}
                   onChange={(e) => setFromDateStr(e.target.value)}
                   placeholder="YYYY-MM-DD HH:mm:ss"
-                  className="w-full px-3.5 py-2.5 bg-white border border-slate-200 rounded-xl text-xs sm:text-sm text-slate-800 font-sans shadow-2xs focus:outline-none focus:border-blue-500 transition-colors"
+                  className="w-full px-2.5 sm:px-3 py-1.5 sm:py-2 bg-white border border-slate-200 rounded-xl text-xs sm:text-sm text-slate-800 font-sans shadow-2xs focus:outline-none focus:border-blue-500 transition-colors"
                 />
               </div>
 
-              <div>
-                <label className="block text-xs font-serif text-slate-500 mb-1">
+              <div className="shrink-0 pt-3 sm:pt-4 text-xs font-semibold text-slate-400 select-none">
+                to
+              </div>
+
+              <div className="flex-1 min-w-0">
+                <label className="block text-[11px] sm:text-xs font-serif text-slate-500 mb-0.5 sm:mb-1">
                   To
                 </label>
                 <input
@@ -590,38 +572,28 @@ export const SMSReportsView: React.FC<SMSReportsViewProps> = ({ embeddedInClient
                   value={toDateStr}
                   onChange={(e) => setToDateStr(e.target.value)}
                   placeholder="YYYY-MM-DD HH:mm:ss"
-                  className="w-full px-3.5 py-2.5 bg-white border border-slate-200 rounded-xl text-xs sm:text-sm text-slate-800 font-sans shadow-2xs focus:outline-none focus:border-blue-500 transition-colors"
+                  className="w-full px-2.5 sm:px-3 py-1.5 sm:py-2 bg-white border border-slate-200 rounded-xl text-xs sm:text-sm text-slate-800 font-sans shadow-2xs focus:outline-none focus:border-blue-500 transition-colors"
                 />
               </div>
             </div>
 
-            {/* Row 2 = Range, CLI, Number (Clean symmetrical boxes side-by-side) */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4">
+            {/* Row 2: Number and CLI side-by-side in one row */}
+            <div className="grid grid-cols-2 gap-2 sm:gap-3">
               <div>
-                <label className="block text-xs font-serif text-slate-500 mb-1">
-                  Range
+                <label className="block text-[11px] sm:text-xs font-serif text-slate-500 mb-0.5 sm:mb-1">
+                  Number
                 </label>
-                <div className="relative">
-                  <select
-                    value={selectedRange}
-                    onChange={(e) => setSelectedRange(e.target.value)}
-                    className="w-full appearance-none px-3.5 py-2.5 bg-white border border-slate-200 rounded-xl text-xs sm:text-sm text-slate-800 font-sans shadow-2xs focus:outline-none focus:border-blue-500 cursor-pointer pr-8 transition-colors"
-                  >
-                    <option value="All">All</option>
-                    {[...ranges]
-                      .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base', numeric: true }))
-                      .map((r) => (
-                        <option key={r.id} value={r.name}>
-                          {r.name}
-                        </option>
-                      ))}
-                  </select>
-                  <ChevronDown className="w-4 h-4 text-slate-400 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
-                </div>
+                <input
+                  type="text"
+                  value={numberFilter}
+                  onChange={(e) => setNumberFilter(e.target.value)}
+                  placeholder="Number contains..."
+                  className="w-full px-2.5 sm:px-3 py-1.5 sm:py-2 bg-white border border-slate-200 rounded-xl text-xs sm:text-sm text-slate-800 placeholder-slate-400 font-sans shadow-2xs focus:outline-none focus:border-blue-500 transition-colors"
+                />
               </div>
 
               <div>
-                <label className="block text-xs font-serif text-slate-500 mb-1 flex items-center justify-between">
+                <label className="block text-[11px] sm:text-xs font-serif text-slate-500 mb-0.5 sm:mb-1 flex items-center justify-between">
                   <span>CLI / App Keyword</span>
                   {cliFilter && (
                     <button
@@ -637,31 +609,42 @@ export const SMSReportsView: React.FC<SMSReportsViewProps> = ({ embeddedInClient
                   type="text"
                   value={cliFilter}
                   onChange={(e) => setCliFilter(e.target.value)}
-                  placeholder="CLI, app name, or SMS keyword (e.g. Apple)..."
-                  className="w-full px-3.5 py-2.5 bg-white border border-slate-200 rounded-xl text-xs sm:text-sm text-slate-800 placeholder-slate-400 font-sans shadow-2xs focus:outline-none focus:border-blue-500 transition-colors"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-serif text-slate-500 mb-1">
-                  Number
-                </label>
-                <input
-                  type="text"
-                  value={numberFilter}
-                  onChange={(e) => setNumberFilter(e.target.value)}
-                  placeholder="Number contains..."
-                  className="w-full px-3.5 py-2.5 bg-white border border-slate-200 rounded-xl text-xs sm:text-sm text-slate-800 placeholder-slate-400 font-sans shadow-2xs focus:outline-none focus:border-blue-500 transition-colors"
+                  placeholder="CLI, app name..."
+                  className="w-full px-2.5 sm:px-3 py-1.5 sm:py-2 bg-white border border-slate-200 rounded-xl text-xs sm:text-sm text-slate-800 placeholder-slate-400 font-sans shadow-2xs focus:outline-none focus:border-blue-500 transition-colors"
                 />
               </div>
             </div>
 
-            {/* Group By Section with 6 neat chips (Client removed) */}
-            <div className="pt-2 border-t border-slate-100 space-y-2.5">
-              <div className="text-xs sm:text-sm font-medium text-slate-700">
-                Group By :
+            {/* Row 3: Range full-width compact box */}
+            <div>
+              <label className="block text-[11px] sm:text-xs font-serif text-slate-500 mb-0.5 sm:mb-1">
+                Range
+              </label>
+              <div className="relative">
+                <select
+                  value={selectedRange}
+                  onChange={(e) => setSelectedRange(e.target.value)}
+                  className="w-full appearance-none px-3 py-1.5 sm:py-2 bg-white border border-slate-200 rounded-xl text-xs sm:text-sm text-slate-800 font-sans shadow-2xs focus:outline-none focus:border-blue-500 cursor-pointer pr-8 transition-colors"
+                >
+                  <option value="All">All</option>
+                  {[...ranges]
+                    .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base', numeric: true }))
+                    .map((r) => (
+                      <option key={r.id} value={r.name}>
+                        {r.name}
+                      </option>
+                    ))}
+                </select>
+                <ChevronDown className="w-4 h-4 text-slate-400 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
               </div>
-              <div className="flex flex-wrap items-center gap-2">
+            </div>
+
+            {/* Row 4: Group By - smaller chips in a single row */}
+            <div className="pt-2 border-t border-slate-100 flex items-center gap-1.5 sm:gap-2 overflow-x-auto no-scrollbar py-0.5">
+              <span className="text-[11px] sm:text-xs font-semibold text-slate-600 shrink-0 select-none">
+                Group By :
+              </span>
+              <div className="flex items-center gap-1 sm:gap-1.5 flex-nowrap shrink-0">
                 {(
                   [
                     { key: 'hour', label: 'Hour' },
@@ -677,17 +660,17 @@ export const SMSReportsView: React.FC<SMSReportsViewProps> = ({ embeddedInClient
                     <label
                       key={key}
                       onClick={() => handleToggleGroup(key)}
-                      className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-xl border text-xs font-medium cursor-pointer transition-all select-none shadow-2xs ${
+                      className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg border text-[11px] font-medium cursor-pointer transition-all select-none shadow-2xs whitespace-nowrap ${
                         isChecked
                           ? 'border-blue-500 bg-blue-50 text-blue-800'
-                          : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
+                          : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
                       }`}
                     >
                       <input
                         type="checkbox"
                         checked={isChecked}
                         onChange={() => {}}
-                        className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-0 cursor-pointer"
+                        className="w-3.5 h-3.5 rounded border-slate-300 text-blue-600 focus:ring-0 cursor-pointer"
                       />
                       <span>{label}</span>
                     </label>
@@ -696,7 +679,7 @@ export const SMSReportsView: React.FC<SMSReportsViewProps> = ({ embeddedInClient
               </div>
             </div>
 
-            {/* Action Buttons: Export Report & Show Report (Blue-Green-White theme) */}
+            {/* Action Buttons: Export Report & Show Report (Preserved as requested) */}
             <div className="grid grid-cols-2 gap-3 pt-2">
               <button
                 type="button"
