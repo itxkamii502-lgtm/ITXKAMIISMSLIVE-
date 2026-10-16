@@ -205,3 +205,56 @@ html.light .bg-emerald-600 {
 body {
   transition: background-color 0.2s ease, color 0.2s ease;
 }
+
+/* Tactile Touch Animation & Galaxy Vibe Feedback */
+@keyframes cosmic-pulse {
+  0%, 100% {
+    box-shadow: 0 0 15px rgba(37, 99, 235, 0.25), 0 0 10px rgba(16, 185, 129, 0.2);
+  }
+  50% {
+    box-shadow: 0 0 25px rgba(37, 99, 235, 0.45), 0 0 18px rgba(16, 185, 129, 0.35);
+  }
+}
+
+.galaxy-card-glow {
+  animation: cosmic-pulse 4s ease-in-out infinite;
+}
+
+/* Mobile & Tablet Tactile Touch Responsiveness */
+button, a, input, select, textarea {
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+button:active {
+  transform: scale(0.98);
+}
+
+/* Responsive custom scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: rgba(15, 23, 42, 0.6);
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(59, 130, 246, 0.4);
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(16, 185, 129, 0.6);
+}
+
+/* Live Celestial Wallpaper Camera Breathing Motion */
+@keyframes kenburns {
+  0% {
+    transform: scale(1.02) translate(0, 0);
+  }
+  50% {
+    transform: scale(1.06) translate(-0.8%, -0.8%);
+  }
+  100% {
+    transform: scale(1.03) translate(0.8%, 0);
+  }
+}

@@ -59,6 +59,41 @@ function extractOtp(message: string): string | undefined {
   return undefined;
 }
 
+// Calculate exact timestamps according to Pakistan Standard Time (PKT = UTC+5)
+// Day resets strictly every day at 05:00:00 AM PKT
+export function getPakistan5AmCycleBounds(nowMs = Date.now()): {
+  todayStartMs: number;
+  todayEndMs: number;
+  yesterdayStartMs: number;
+  yesterdayEndMs: number;
+} {
+  const PKT_OFFSET_MS = 5 * 60 * 60 * 1000;
+  const pktDate = new Date(nowMs + PKT_OFFSET_MS);
+  const pktYear = pktDate.getUTCFullYear();
+  const pktMonth = pktDate.getUTCMonth();
+  const pktDay = pktDate.getUTCDate();
+  const pktHour = pktDate.getUTCHours();
+
+  // If PKT hour >= 5, current cycle started today at 05:00:00 AM PKT (UTC 00:00:00)
+  // If PKT hour < 5, current cycle started yesterday at 05:00:00 AM PKT (UTC 00:00:00 of prev day)
+  let cycleBaseDate = Date.UTC(pktYear, pktMonth, pktDay, 0, 0, 0, 0);
+  if (pktHour < 5) {
+    cycleBaseDate -= 24 * 60 * 60 * 1000;
+  }
+
+  const todayStartMs = cycleBaseDate;
+  const todayEndMs = todayStartMs + 24 * 60 * 60 * 1000 - 1;
+  const yesterdayStartMs = todayStartMs - 24 * 60 * 60 * 1000;
+  const yesterdayEndMs = todayStartMs - 1;
+
+  return {
+    todayStartMs,
+    todayEndMs,
+    yesterdayStartMs,
+    yesterdayEndMs,
+  };
+}
+
 // Complete Worldwide Calling Codes Mapping (ITU-T E.164)
 const CALLING_CODES_MAP: Record<string, string> = {
   // --- 4-Digit NANP Caribbean & Territories ---
@@ -429,7 +464,7 @@ class Store {
     customLogoUrl: '',
     theme: 'emerald',
     darkMode: true,
-    clientSessionMinutes: 60,
+    clientSessionMinutes: 5,
     enableSoundByDefault: true,
     webhookToken: process.env.WEBHOOK_TOKEN || ('kbmax_' + crypto.randomBytes(12).toString('hex')),
     adminUsername: process.env.ADMIN_USERNAME || 'ITXKAMII',
@@ -774,8 +809,8 @@ class Store {
           }
 
           const token = generateToken();
-          // Strictly adhere to Admin-configured fixed session duration for all clients
-          const sessionMinutes = Math.max(1, Math.min(1440, Number(this.settings.clientSessionMinutes) || 60));
+          // Strictly adhere to Admin-configured fixed session duration for all clients (e.g. 5m, 10m)
+          const sessionMinutes = Math.max(1, Math.min(1440, Number(this.settings.clientSessionMinutes) || 5));
           // Universal client box capacity strictly configured by Admin for all clients (no client-specific override)
           const storageLimit = Math.max(100, Math.min(50000, Number(this.settings.clientMaxRetention) || 500));
 
@@ -960,7 +995,7 @@ class Store {
       ? data.allowedServices.slice(0, 50).map(s => sanitizeInputString(s, 64)).filter(Boolean)
       : ['*'];
 
-    const sessionMinutes = Math.max(1, Math.min(1440, Number(this.settings.clientSessionMinutes) || 60));
+    const sessionMinutes = Math.max(1, Math.min(1440, Number(this.settings.clientSessionMinutes) || 5));
 
     const storageLimit = data.storageLimit && Number(data.storageLimit) >= 500
       ? Math.max(500, Math.min(50000, Number(data.storageLimit)))
@@ -1155,7 +1190,26 @@ class Store {
 
   // --- API Providers ---
   public getProviders(): ApiProvider[] {
-    return Array.from(this.apiProviders.values());
+    const { todayStartMs, yesterdayStartMs } = getPakistan5AmCycleBounds();
+    const providerTodayCounts: Record<string, number> = {};
+    const providerYesterdayCounts: Record<string, number> = {};
+
+    for (const m of this.messages) {
+      if (m.providerId) {
+        const ts = m.timestamp || 0;
+        if (ts >= todayStartMs) {
+          providerTodayCounts[m.providerId] = (providerTodayCounts[m.providerId] || 0) + 1;
+        } else if (ts >= yesterdayStartMs && ts < todayStartMs) {
+          providerYesterdayCounts[m.providerId] = (providerYesterdayCounts[m.providerId] || 0) + 1;
+        }
+      }
+    }
+
+    return Array.from(this.apiProviders.values()).map(p => ({
+      ...p,
+      todayFetched: providerTodayCounts[p.id] || 0,
+      yesterdayFetched: providerYesterdayCounts[p.id] || 0,
+    }));
   }
 
   public addProvider(data: Partial<ApiProvider>): { provider?: ApiProvider; error?: string } {
@@ -1755,6 +1809,152 @@ class Store {
       duplicateCount,
       movedCount,
       conflictSample,
+    };
+  }
+
+  // Multi-Range Bulk Document Import (Auto-detects and adds/creates ranges & numbers from uploaded document)
+  public multiImportRanges(rangesData: Array<{ name: string; prefix?: string; countryNote?: string; numbers: string[] }>): {
+    success: boolean;
+    error?: string;
+    rangesCreated: number;
+    rangesUpdated: number;
+    totalNumbersProcessed: number;
+    totalAdded: number;
+    totalDuplicates: number;
+    totalMoved: number;
+    details: Array<{
+      name: string;
+      action: 'created' | 'updated';
+      added: number;
+      duplicates: number;
+      moved: number;
+      totalInRange: number;
+      prefix: string;
+      countryNote?: string;
+    }>;
+    ranges: NumberRange[];
+  } {
+    if (!Array.isArray(rangesData) || rangesData.length === 0) {
+      return {
+        success: false,
+        error: 'No valid ranges data provided',
+        rangesCreated: 0,
+        rangesUpdated: 0,
+        totalNumbersProcessed: 0,
+        totalAdded: 0,
+        totalDuplicates: 0,
+        totalMoved: 0,
+        details: [],
+        ranges: this.getRanges(),
+      };
+    }
+
+    let rangesCreated = 0;
+    let rangesUpdated = 0;
+    let totalNumbersProcessed = 0;
+    let totalAdded = 0;
+    let totalDuplicates = 0;
+    let totalMoved = 0;
+    const details: Array<{
+      name: string;
+      action: 'created' | 'updated';
+      added: number;
+      duplicates: number;
+      moved: number;
+      totalInRange: number;
+      prefix: string;
+      countryNote?: string;
+    }> = [];
+
+    for (const item of rangesData) {
+      const cleanName = sanitizeInputString(item.name || '', 100).trim();
+      if (!cleanName) continue;
+
+      const nums = Array.isArray(item.numbers) ? item.numbers : [];
+      totalNumbersProcessed += nums.length;
+
+      // Find existing range by name (case-insensitive)
+      const existingRange = Array.from(this.ranges.values()).find(
+        r => r.name.toLowerCase().trim() === cleanName.toLowerCase()
+      );
+
+      if (existingRange) {
+        const res = this.addNumbersToRange(existingRange.id, nums);
+        rangesUpdated++;
+        totalAdded += res.addedCount;
+        totalDuplicates += res.duplicateCount;
+        totalMoved += res.movedCount;
+        details.push({
+          name: existingRange.name,
+          action: 'updated',
+          added: res.addedCount,
+          duplicates: res.duplicateCount,
+          moved: res.movedCount,
+          totalInRange: existingRange.totalNumbers,
+          prefix: existingRange.prefix,
+          countryNote: existingRange.countryNote,
+        });
+      } else {
+        // Range does not exist: detect prefix & country
+        let cleanPrefix = sanitizeInputString(item.prefix || '', 8).replace(/\D/g, '');
+        let detectedCountry = 'Worldwide';
+
+        // Try detecting from sample numbers if prefix is missing
+        if (!cleanPrefix && nums.length > 0) {
+          const sampleNum = String(nums[0]).replace(/\D/g, '');
+          const p4 = sampleNum.slice(0, 4);
+          const p3 = sampleNum.slice(0, 3);
+          const p2 = sampleNum.slice(0, 2);
+          const p1 = sampleNum.slice(0, 1);
+          if (CALLING_CODES_MAP[p4]) { cleanPrefix = p4; detectedCountry = CALLING_CODES_MAP[p4]; }
+          else if (CALLING_CODES_MAP[p3]) { cleanPrefix = p3; detectedCountry = CALLING_CODES_MAP[p3]; }
+          else if (CALLING_CODES_MAP[p2]) { cleanPrefix = p2; detectedCountry = CALLING_CODES_MAP[p2]; }
+          else if (CALLING_CODES_MAP[p1]) { cleanPrefix = p1; detectedCountry = CALLING_CODES_MAP[p1]; }
+        }
+
+        if (cleanPrefix && CALLING_CODES_MAP[cleanPrefix]) {
+          detectedCountry = CALLING_CODES_MAP[cleanPrefix];
+        }
+
+        const countryNote = item.countryNote || (detectedCountry !== 'Worldwide' ? detectedCountry : undefined);
+        const res = this.createRange({
+          name: cleanName,
+          prefix: cleanPrefix || '1',
+          countryNote,
+          numbers: nums,
+        });
+
+        if (res.success && res.range) {
+          rangesCreated++;
+          totalAdded += res.addedCount;
+          totalDuplicates += res.duplicateCount;
+          totalMoved += res.movedCount;
+          details.push({
+            name: res.range.name,
+            action: 'created',
+            added: res.addedCount,
+            duplicates: res.duplicateCount,
+            moved: res.movedCount,
+            totalInRange: res.range.totalNumbers,
+            prefix: res.range.prefix,
+            countryNote: res.range.countryNote,
+          });
+        }
+      }
+    }
+
+    this.scheduleSave();
+
+    return {
+      success: true,
+      rangesCreated,
+      rangesUpdated,
+      totalNumbersProcessed,
+      totalAdded,
+      totalDuplicates,
+      totalMoved,
+      details,
+      ranges: this.getRanges(),
     };
   }
 
@@ -2965,13 +3165,8 @@ class Store {
 
   public getStats(): SystemStats {
     const now = Date.now();
-    const todayStart = new Date();
-    todayStart.setHours(0, 0, 0, 0);
-    const todayMs = todayStart.getTime();
-
-    const yesterdayStart = new Date(todayStart);
-    yesterdayStart.setDate(yesterdayStart.getDate() - 1);
-    const yesterdayMs = yesterdayStart.getTime();
+    // Strictly calculate daily stats based on Pakistan Standard Time (PKT = UTC+5) 5:00 AM reset cycle
+    const { todayStartMs, yesterdayStartMs } = getPakistan5AmCycleBounds(now);
 
     const weekStartMs = now - 7 * 86400000;
 
@@ -2980,6 +3175,7 @@ class Store {
     monthStart.setHours(0, 0, 0, 0);
     const monthStartMs = monthStart.getTime();
 
+    const todayStart = new Date(todayStartMs);
     const yearStart = new Date(todayStart.getFullYear(), 0, 1, 0, 0, 0, 0);
     const yearStartMs = yearStart.getTime();
 
@@ -2991,9 +3187,9 @@ class Store {
 
     for (const m of this.messages) {
       const ts = m.timestamp || 0;
-      if (ts >= todayMs) {
+      if (ts >= todayStartMs) {
         todaySms++;
-      } else if (ts >= yesterdayMs && ts < todayMs) {
+      } else if (ts >= yesterdayStartMs && ts < todayStartMs) {
         yesterdaySms++;
       }
       if (ts >= weekStartMs) {
@@ -3007,14 +3203,13 @@ class Store {
       }
     }
 
-    // Daily stats for last 7 days for the dashboard chart
+    // Daily stats for last 7 cycles of 24-hours aligned to Pakistan 5:00 AM cycle
     const dailyStats: { date: string; count: number; label: string }[] = [];
     for (let i = 6; i >= 0; i--) {
-      const d = new Date(todayStart);
-      d.setDate(d.getDate() - i);
-      const dayStart = d.getTime();
-      const dayEnd = dayStart + 86400000;
-      const count = this.messages.filter(m => (m.timestamp || 0) >= dayStart && (m.timestamp || 0) < dayEnd).length;
+      const cycleStart = todayStartMs - i * 86400000;
+      const cycleEnd = cycleStart + 86400000;
+      const count = this.messages.filter(m => (m.timestamp || 0) >= cycleStart && (m.timestamp || 0) < cycleEnd).length;
+      const d = new Date(cycleStart + 5 * 3600000); // PKT representation
       const label = d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
       dailyStats.push({
         date: d.toISOString().split('T')[0],

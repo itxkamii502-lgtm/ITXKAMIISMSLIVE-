@@ -28,6 +28,7 @@ import { ClientFilterView } from './ClientFilterView';
 import { BulkNumbersView } from './BulkNumbersView';
 import { SMSReportsView } from '../reports/SMSReportsView';
 import { THEMES } from '../../utils/theme';
+import { triggerHapticFeedback } from '../../utils/haptics';
 
 type AdminTab = 'dashboard' | 'providers' | 'clients' | 'sms' | 'sms-reports' | 'client-filters' | 'settings' | 'bulk-numbers';
 
@@ -75,6 +76,7 @@ export const AdminLayout: React.FC = () => {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
   const navigateToTab = (tab: string) => {
+    triggerHapticFeedback(12);
     const resolvedTab: AdminTab = tab === 'reports' ? 'sms-reports' : (tab as AdminTab);
     setActiveTabState(resolvedTab);
     const targetPath = TAB_TO_PATH[resolvedTab] || '/admin/dashboard';

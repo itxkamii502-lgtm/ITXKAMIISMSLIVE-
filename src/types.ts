@@ -85,6 +85,8 @@ export interface ApiProvider {
   lastSyncStatus?: 'success' | 'failed' | 'idle' | 'running';
   lastSyncError?: string;
   totalFetched: number;
+  todayFetched?: number;
+  yesterdayFetched?: number;
   webhookSecret: string;
   enabled: boolean;
   createdAt: number;

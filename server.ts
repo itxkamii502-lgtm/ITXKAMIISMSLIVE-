@@ -764,11 +764,43 @@ app.put('/api/clients/:id', requireAdmin, (req: AuthRequest, res: Response) => {
 });
 
 app.delete('/api/clients/:id', requireAdmin, (req: AuthRequest, res: Response) => {
+  const pin = (req.headers['x-security-pin'] as string) || req.body?.securityPin || (req.query?.securityPin as string);
+  const pinCheck = store.verifySecurityPin(pin);
+  if (!pinCheck.valid) {
+    return res.status(403).json({ error: pinCheck.error || 'Master Security PIN is required to delete client account.' });
+  }
+
   const deleted = store.deleteClient(req.params.id);
   if (!deleted) {
     return res.status(404).json({ error: 'Client not found' });
   }
   res.json({ success: true, message: 'Client removed and active sessions terminated' });
+});
+
+app.post('/api/clients/batch-delete', requireAdmin, (req: AuthRequest, res: Response) => {
+  const pin = (req.headers['x-security-pin'] as string) || req.body?.securityPin || (req.query?.securityPin as string);
+  const pinCheck = store.verifySecurityPin(pin);
+  if (!pinCheck.valid) {
+    return res.status(403).json({ error: pinCheck.error || 'Master Security PIN is required to batch delete clients.' });
+  }
+
+  const clientIds: string[] = req.body?.clientIds;
+  if (!Array.isArray(clientIds) || clientIds.length === 0) {
+    return res.status(400).json({ error: 'Please select at least one client to delete.' });
+  }
+
+  let deletedCount = 0;
+  for (const id of clientIds) {
+    if (store.deleteClient(id)) {
+      deletedCount++;
+    }
+  }
+
+  res.json({
+    success: true,
+    deletedCount,
+    message: `Successfully deleted ${deletedCount} client account(s).`,
+  });
 });
 
 app.post('/api/clients/:id/unlock', requireAdmin, (req: AuthRequest, res: Response) => {
@@ -816,6 +848,25 @@ app.post('/api/ranges/deduplicate-all', requireAdmin, (_req: AuthRequest, res: R
     message: result.duplicatesRemoved > 0
       ? `Audit complete! Removed ${result.duplicatesRemoved.toLocaleString()} duplicate number(s) across ${result.rangesModified.length} range(s). All numbers are now 100% unique.`
       : `Audit complete! No duplicate numbers found across ${result.totalRanges} configured range(s). All ${result.totalNumbersAfter.toLocaleString()} numbers are 100% unique.`,
+  });
+});
+
+// Admin-only: Multi-Range Bulk Document Import (Auto creates/updates multiple ranges from CSV / document)
+app.post('/api/ranges/multi-import', requireAdmin, (req: AuthRequest, res: Response) => {
+  const { items } = req.body || {};
+  if (!Array.isArray(items) || items.length === 0) {
+    return res.status(400).json({ error: 'No valid ranges data provided. Please upload or paste a valid document.' });
+  }
+
+  const result = store.multiImportRanges(items);
+  if (!result.success) {
+    return res.status(400).json({ error: result.error || 'Failed to import ranges' });
+  }
+
+  return res.json({
+    success: true,
+    ...result,
+    message: `Import complete! Processed ${result.totalNumbersProcessed.toLocaleString()} numbers across ${result.details.length} ranges (${result.rangesCreated} new ranges created, ${result.rangesUpdated} existing ranges updated). Added ${result.totalAdded.toLocaleString()} numbers.`,
   });
 });
 

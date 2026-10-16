@@ -870,6 +870,24 @@ print(response.json())`;
                     </div>
                   </div>
 
+                  {/* Today & Yesterday 5:00 AM PKT Cycle Stats */}
+                  <div className="grid grid-cols-2 gap-2 text-[11px] font-mono">
+                    <div className="p-2.5 bg-emerald-950/30 rounded-xl border border-emerald-500/20 flex items-center justify-between">
+                      <div>
+                        <span className="text-emerald-400 font-bold block text-[10px]">Today SMS</span>
+                        <span className="text-slate-400 text-[9px]">5:00 AM PKT Cycle</span>
+                      </div>
+                      <span className="text-emerald-300 font-bold text-sm">{(p.todayFetched || 0).toLocaleString()}</span>
+                    </div>
+                    <div className="p-2.5 bg-blue-950/30 rounded-xl border border-blue-500/20 flex items-center justify-between">
+                      <div>
+                        <span className="text-blue-400 font-bold block text-[10px]">Yesterday SMS</span>
+                        <span className="text-slate-400 text-[9px]">Previous Cycle</span>
+                      </div>
+                      <span className="text-blue-300 font-bold text-sm">{(p.yesterdayFetched || 0).toLocaleString()}</span>
+                    </div>
+                  </div>
+
                   {/* Test Status feedback if clicked */}
                   {testResult && testResult.id === p.id && (
                     <div className={`p-2.5 rounded-xl border text-xs font-mono flex items-center gap-2 ${

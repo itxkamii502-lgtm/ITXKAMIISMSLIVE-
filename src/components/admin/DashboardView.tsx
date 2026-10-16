@@ -38,6 +38,7 @@ import { useAuth } from '../../context/AuthContext';
 import { THEMES } from '../../utils/theme';
 import { soundManager } from '../../utils/sound';
 import { formatDateTime, resolveRangeName } from '../../utils/countryLookup';
+import { getPakistan5AmCycleBounds } from '../../utils/pakistanTime';
 import type { SystemStats, Partition, SmsMessage, NumberRange } from '../../types';
 
 interface DashboardViewProps {
@@ -46,41 +47,24 @@ interface DashboardViewProps {
 
 type TimeframeType = 'today' | 'yesterday' | 'month' | 'year' | 'custom';
 
-// Date Range Utility Helpers in Pakistan Standard Time / Local
+// Date Range Utility Helpers strictly aligned to Pakistan Standard Time (PKT = UTC+5) 5:00 AM cycle
 function getTodayRange(): { fromStr: string; toStr: string; fromMs: number; toMs: number } {
-  const d = new Date();
-  d.setHours(0, 0, 0, 0);
-  const fromMs = d.getTime();
-  const toD = new Date();
-  toD.setHours(23, 59, 59, 999);
-  const toMs = toD.getTime();
-  const yyyy = d.getFullYear();
-  const mm = String(d.getMonth() + 1).padStart(2, '0');
-  const dd = String(d.getDate()).padStart(2, '0');
+  const { todayStartMs, todayEndMs, todayFromStr, todayToStr } = getPakistan5AmCycleBounds();
   return {
-    fromStr: `${yyyy}-${mm}-${dd} 00:00:00`,
-    toStr: `${yyyy}-${mm}-${dd} 23:59:59`,
-    fromMs,
-    toMs,
+    fromStr: todayFromStr,
+    toStr: todayToStr,
+    fromMs: todayStartMs,
+    toMs: todayEndMs,
   };
 }
 
 function getYesterdayRange(): { fromStr: string; toStr: string; fromMs: number; toMs: number } {
-  const d = new Date();
-  d.setDate(d.getDate() - 1);
-  d.setHours(0, 0, 0, 0);
-  const fromMs = d.getTime();
-  const toD = new Date(d);
-  toD.setHours(23, 59, 59, 999);
-  const toMs = toD.getTime();
-  const yyyy = d.getFullYear();
-  const mm = String(d.getMonth() + 1).padStart(2, '0');
-  const dd = String(d.getDate()).padStart(2, '0');
+  const { yesterdayStartMs, yesterdayEndMs, yesterdayFromStr, yesterdayToStr } = getPakistan5AmCycleBounds();
   return {
-    fromStr: `${yyyy}-${mm}-${dd} 00:00:00`,
-    toStr: `${yyyy}-${mm}-${dd} 23:59:59`,
-    fromMs,
-    toMs,
+    fromStr: yesterdayFromStr,
+    toStr: yesterdayToStr,
+    fromMs: yesterdayStartMs,
+    toMs: yesterdayEndMs,
   };
 }
 
@@ -760,13 +744,13 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
             onClick={() => setActiveTimeframe('month')}
             className={`rounded-2xl p-4 sm:p-5 shadow-lg flex flex-col justify-between cursor-pointer transition-all group ${
               activeTimeframe === 'month'
-                ? 'bg-slate-900 border-2 border-purple-500 shadow-purple-900/40 ring-1 ring-purple-500/30'
-                : 'bg-slate-900/90 border border-slate-800 hover:border-purple-500/50'
+                ? 'bg-slate-900 border-2 border-sky-500 shadow-sky-900/40 ring-1 ring-sky-500/30'
+                : 'bg-slate-900/90 border border-slate-800 hover:border-sky-500/50'
             }`}
           >
             <div className="flex items-center justify-between mb-2">
-              <span className="text-xs font-bold text-slate-300 group-hover:text-purple-400 transition-colors">Monthly SMS</span>
-              <div className="p-2 rounded-xl bg-purple-500/10 text-purple-400 border border-purple-500/20 group-hover:scale-105 transition-transform">
+              <span className="text-xs font-bold text-slate-300 group-hover:text-sky-400 transition-colors">Monthly SMS</span>
+              <div className="p-2 rounded-xl bg-sky-500/10 text-sky-400 border border-sky-500/20 group-hover:scale-105 transition-transform">
                 <Calendar className="w-4 h-4" />
               </div>
             </div>
@@ -774,7 +758,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
               <div className="text-2xl sm:text-3xl font-black text-white font-mono">
                 {(stats?.thisMonthSms ?? 0).toLocaleString()}
               </div>
-              <span className="text-[11px] text-purple-400 font-medium flex items-center gap-1 mt-1">
+              <span className="text-[11px] text-sky-400 font-medium flex items-center gap-1 mt-1">
                 <span>Current month total</span>
               </span>
             </div>
@@ -785,13 +769,13 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
             onClick={() => setActiveTimeframe('year')}
             className={`rounded-2xl p-4 sm:p-5 shadow-lg flex flex-col justify-between cursor-pointer transition-all group ${
               activeTimeframe === 'year'
-                ? 'bg-slate-900 border-2 border-amber-500 shadow-amber-900/40 ring-1 ring-amber-500/30'
-                : 'bg-slate-900/90 border border-slate-800 hover:border-amber-500/50'
+                ? 'bg-slate-900 border-2 border-emerald-400 shadow-emerald-900/40 ring-1 ring-emerald-400/30'
+                : 'bg-slate-900/90 border border-slate-800 hover:border-emerald-500/50'
             }`}
           >
             <div className="flex items-center justify-between mb-2">
-              <span className="text-xs font-bold text-slate-300 group-hover:text-amber-400 transition-colors">Yearly SMS</span>
-              <div className="p-2 rounded-xl bg-amber-500/10 text-amber-400 border border-amber-500/20 group-hover:scale-105 transition-transform">
+              <span className="text-xs font-bold text-slate-300 group-hover:text-emerald-400 transition-colors">Yearly SMS</span>
+              <div className="p-2 rounded-xl bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 group-hover:scale-105 transition-transform">
                 <Clock className="w-4 h-4" />
               </div>
             </div>
@@ -799,7 +783,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
               <div className="text-2xl sm:text-3xl font-black text-white font-mono">
                 {(stats?.thisYearSms ?? stats?.totalSms ?? 0).toLocaleString()}
               </div>
-              <span className="text-[11px] text-amber-400 font-medium flex items-center gap-1 mt-1">
+              <span className="text-[11px] text-emerald-400 font-medium flex items-center gap-1 mt-1">
                 <span>Current year cumulative</span>
               </span>
             </div>

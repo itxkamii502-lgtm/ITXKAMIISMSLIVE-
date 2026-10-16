@@ -16,6 +16,7 @@ import {
 import { useAuth } from '../context/AuthContext';
 import { BrandLogo } from './common/BrandLogo';
 import { ThemeToggle } from './common/ThemeToggle';
+import { CosmicMountainLiveBackground } from './common/CosmicMountainLiveBackground';
 import { THEMES } from '../utils/theme';
 
 export const LoginScreen: React.FC = () => {
@@ -92,40 +93,30 @@ export const LoginScreen: React.FC = () => {
   const lockSeconds = remainingLockSec % 60;
 
   return (
-    <div className="min-h-screen w-full bg-[#080d15] flex flex-col items-center justify-center p-4 sm:p-6 relative overflow-hidden font-sans selection:bg-emerald-600 selection:text-white">
-      {/* Flag color palette ambient background: Emerald Green and Ruby Red glows */}
-      <div className="absolute inset-0 bg-[radial-gradient(ellipse_80%_80%_at_50%_-15%,rgba(16,185,129,0.26),rgba(220,38,38,0.22),rgba(255,255,255,0.02))]" />
-      <div className="absolute -top-40 -left-40 w-[550px] h-[550px] bg-emerald-600/20 rounded-full blur-3xl pointer-events-none" />
-      <div className="absolute -bottom-40 -right-40 w-[550px] h-[550px] bg-red-600/20 rounded-full blur-3xl pointer-events-none" />
-
-      {/* Grid Pattern overlay */}
-      <div 
-        className="absolute inset-0 opacity-[0.035] pointer-events-none" 
-        style={{
-          backgroundImage: `url("data:image/svg+xml,%3Csvg width='30' height='30' viewBox='0 0 30 30' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1.5 0H0V1.5V30H1.5V1.5H30V0H1.5Z' fill='%23FFFFFF'/%3E%3C/svg%3E")`
-        }} 
-      />
+    <div className="min-h-screen w-full bg-[#030712] flex flex-col items-center justify-center p-4 sm:p-6 relative overflow-hidden font-sans selection:bg-emerald-600 selection:text-white">
+      {/* User's Exact Celestial Mountain & Moon Live Video Wallpaper (Silent, No Sound, Login Only) */}
+      <CosmicMountainLiveBackground />
 
       <div className="relative z-10 w-full max-w-md flex flex-col items-center">
-        {/* Main Brand Logo Header (Large, Prominent & Distinct with Flag Emblem) */}
+        {/* Main Brand Logo Header (Large, Prominent & Distinct) */}
         <div className="mb-8 flex flex-col items-center justify-center scale-105 sm:scale-110 transition-transform">
           <BrandLogo size="2xl" layout="vertical" />
         </div>
 
-        {/* Clean Login Card */}
+        {/* Clean Login Card with Green, White, and Blue Theme */}
         <motion.div
           initial={{ opacity: 0, y: 15 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.3, ease: 'easeOut' }}
-          className="w-full bg-slate-900/90 border border-emerald-500/20 rounded-3xl shadow-[0_20px_50px_rgba(15,23,42,0.9),0_0_35px_rgba(16,185,129,0.15),0_0_35px_rgba(220,38,38,0.12)] backdrop-blur-2xl p-7 sm:p-9 ring-1 ring-white/10"
+          className="w-full bg-slate-900/85 border border-blue-500/25 rounded-3xl shadow-[0_20px_50px_rgba(3,7,18,0.9),0_0_35px_rgba(37,99,235,0.18),0_0_35px_rgba(16,185,129,0.14)] backdrop-blur-2xl p-7 sm:p-9 ring-1 ring-white/10"
           id="login-card-container"
         >
-          {/* Header Title with Green-White-Red Accent Bar */}
+          {/* Header Title with Green-White-Blue Accent Bar */}
           <div className="text-center space-y-1.5 mb-6">
             <h1 className="text-2xl sm:text-3xl font-black text-white tracking-tight">
               Sign In
             </h1>
-            <div className="h-1.5 w-24 mx-auto rounded-full bg-gradient-to-r from-emerald-500 via-white to-red-600 shadow-md shadow-emerald-500/20" />
+            <div className="h-1.5 w-24 mx-auto rounded-full bg-gradient-to-r from-emerald-400 via-white to-blue-500 shadow-md shadow-blue-500/30" />
             <p className="text-xs text-slate-300 font-medium pt-1">
               Enter your credentials to access the secure portal
             </p>
@@ -252,7 +243,7 @@ export const LoginScreen: React.FC = () => {
                 Password
               </label>
               <div className="relative">
-                <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-red-400">
+                <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-blue-400">
                   <Lock className="w-4 h-4" />
                 </div>
                 <input
@@ -266,7 +257,7 @@ export const LoginScreen: React.FC = () => {
                     if (error) setError(null);
                   }}
                   placeholder="Enter password"
-                  className="w-full pl-10 pr-10 py-3 bg-slate-950/85 border border-slate-700/80 rounded-xl text-sm text-white placeholder-slate-400 focus:outline-none focus:border-red-400 focus:ring-2 focus:ring-red-500/30 transition-all font-mono shadow-inner"
+                  className="w-full pl-10 pr-10 py-3 bg-slate-950/85 border border-slate-700/80 rounded-xl text-sm text-white placeholder-slate-400 focus:outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-500/30 transition-all font-mono shadow-inner"
                 />
                 <button
                   type="button"
@@ -279,12 +270,12 @@ export const LoginScreen: React.FC = () => {
               </div>
             </div>
 
-            {/* Gradient Button from Emerald Green to Ruby Red */}
+            {/* Gradient Button from Emerald Green via Royal Blue to Sky Blue */}
             <button
               id="login-submit-btn"
               type="submit"
               disabled={isSubmitting}
-              className="w-full py-3.5 px-4 rounded-xl bg-gradient-to-r from-emerald-600 via-emerald-500 to-red-600 hover:from-emerald-500 hover:via-emerald-600 hover:to-red-500 text-white font-black shadow-xl shadow-emerald-950/40 border border-white/20 transition-all flex items-center justify-center gap-2 text-sm disabled:opacity-50 disabled:cursor-not-allowed mt-5 cursor-pointer active:scale-[0.98]"
+              className="w-full py-3.5 px-4 rounded-xl bg-gradient-to-r from-emerald-600 via-blue-600 to-sky-500 hover:from-emerald-500 hover:via-blue-500 hover:to-sky-400 text-white font-black shadow-xl shadow-blue-950/40 border border-white/20 transition-all flex items-center justify-center gap-2 text-sm disabled:opacity-50 disabled:cursor-not-allowed mt-5 cursor-pointer active:scale-[0.98]"
             >
               {isSubmitting ? (
                 <>
@@ -310,10 +301,10 @@ export const LoginScreen: React.FC = () => {
               initial={{ opacity: 0, scale: 0.95, y: 12 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.95, y: 12 }}
-              className="w-full max-w-md bg-slate-900 border-2 border-emerald-500/60 rounded-3xl p-6 sm:p-8 shadow-[0_25px_60px_-15px_rgba(0,0,0,0.9),0_0_35px_rgba(16,185,129,0.25)] space-y-5 text-slate-100 ring-1 ring-white/10"
+              className="w-full max-w-md bg-slate-900 border-2 border-blue-500/60 rounded-3xl p-6 sm:p-8 shadow-[0_25px_60px_-15px_rgba(0,0,0,0.9),0_0_35px_rgba(37,99,235,0.25)] space-y-5 text-slate-100 ring-1 ring-white/10"
             >
               <div className="flex items-start gap-4">
-                <div className="w-13 h-13 rounded-2xl bg-gradient-to-br from-emerald-500/25 to-red-500/25 border-2 border-emerald-500/40 flex items-center justify-center text-emerald-400 shrink-0 shadow-xl">
+                <div className="w-13 h-13 rounded-2xl bg-gradient-to-br from-emerald-500/25 to-blue-500/25 border-2 border-blue-500/40 flex items-center justify-center text-blue-400 shrink-0 shadow-xl">
                   <AlertCircle className="w-7 h-7" />
                 </div>
                 <div className="flex-1 min-w-0">
@@ -323,7 +314,7 @@ export const LoginScreen: React.FC = () => {
                   <h3 className="text-xl font-black text-white tracking-tight mt-0.5">
                     Account Deactivated
                   </h3>
-                  <div className="h-0.5 w-14 rounded-full bg-gradient-to-r from-emerald-400 via-white to-red-500 mt-1.5" />
+                  <div className="h-0.5 w-14 rounded-full bg-gradient-to-r from-emerald-400 via-white to-blue-500 mt-1.5" />
                 </div>
               </div>
 
@@ -349,7 +340,7 @@ export const LoginScreen: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => setInactiveModalOpen(false)}
-                  className="w-full py-3.5 px-4 rounded-xl bg-gradient-to-r from-emerald-600 via-emerald-500 to-red-600 hover:from-emerald-500 hover:to-red-500 text-white font-black text-xs transition-all shadow-lg shadow-emerald-950/40 cursor-pointer text-center active:scale-[0.98] border border-white/20"
+                  className="w-full py-3.5 px-4 rounded-xl bg-gradient-to-r from-emerald-600 via-blue-600 to-sky-500 hover:from-emerald-500 hover:via-blue-500 hover:to-sky-400 text-white font-black text-xs transition-all shadow-lg shadow-blue-950/40 cursor-pointer text-center active:scale-[0.98] border border-white/20"
                 >
                   Understood & Close
                 </button>
