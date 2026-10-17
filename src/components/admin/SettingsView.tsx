@@ -21,7 +21,11 @@ import {
   KeyRound,
   Radio,
   SlidersHorizontal,
-  HardDrive
+  HardDrive,
+  Film,
+  Play,
+  Upload,
+  Video
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { THEMES } from '../../utils/theme';
@@ -31,7 +35,7 @@ export const SettingsView: React.FC = () => {
   const { session, settings, updateSettings, logout } = useAuth();
   const currentTheme = settings?.theme ? THEMES[settings.theme] : THEMES.emerald;
 
-  const [activeTab, setActiveTab] = useState<'security' | 'retention' | 'branding' | 'theme' | 'sms_style' | 'vps'>('retention');
+  const [activeTab, setActiveTab] = useState<'security' | 'retention' | 'login_bg' | 'branding' | 'theme' | 'sms_style' | 'vps'>('retention');
   const [notice, setNotice] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
@@ -40,6 +44,17 @@ export const SettingsView: React.FC = () => {
   const [maxSmsRetention, setMaxSmsRetention] = useState<number>(settings?.maxSmsRetention || 2000);
   // Universal Client OTP Box Capacity (Uniformly fixed by Admin for all clients)
   const [clientMaxRetention, setClientMaxRetention] = useState<number>(settings?.clientMaxRetention || 500);
+
+  // Login Background Settings (Admin can add Picture or Video looping on Login Page)
+  const [loginBgType, setLoginBgType] = useState<'cosmic' | 'galaxy' | 'video' | 'image'>(
+    settings?.loginBgType || 'cosmic'
+  );
+  const [loginBgMediaUrl, setLoginBgMediaUrl] = useState<string>(settings?.loginBgMediaUrl || '');
+  const [loginBgVideoLoop, setLoginBgVideoLoop] = useState<boolean>(settings?.loginBgVideoLoop ?? true);
+  const [loginBgOpacity, setLoginBgOpacity] = useState<number>(
+    typeof settings?.loginBgOpacity === 'number' ? settings.loginBgOpacity : 65
+  );
+  const [mediaFileName, setMediaFileName] = useState<string>('');
 
   // Live SMS Table & Font Color Styling
   const [smsTableBgColor, setSmsTableBgColor] = useState<string>(settings?.smsTableBgColor || '#090d16');
@@ -195,6 +210,103 @@ export const SettingsView: React.FC = () => {
     }
   };
 
+  const [isUploadingMedia, setIsUploadingMedia] = useState(false);
+
+  const handleMediaFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (file.size > 50 * 1024 * 1024) {
+      setNotice({ 
+        type: 'error', 
+        message: 'File size must be under 50MB. For larger video files, paste a direct video MP4 URL.' 
+      });
+      return;
+    }
+
+    const sizeMb = (file.size / (1024 * 1024)).toFixed(1);
+    setMediaFileName(file.name);
+    const isVideo = file.type.startsWith('video/') || file.name.endsWith('.mp4') || file.name.endsWith('.webm');
+    if (isVideo) {
+      setLoginBgType('video');
+    } else {
+      setLoginBgType('image');
+    }
+
+    setIsUploadingMedia(true);
+    setNotice({
+      type: 'success',
+      message: `Uploading ${isVideo ? 'video' : 'picture'} "${file.name}" (${sizeMb} MB)... Please wait.`,
+    });
+
+    try {
+      if (session) {
+        // Direct stream upload up to 50MB to server media storage
+        const res = await fetch(`/api/upload/media?filename=${encodeURIComponent(file.name)}`, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${session.token}`,
+            'Content-Type': file.type || 'application/octet-stream',
+          },
+          body: file,
+        });
+
+        if (res.ok) {
+          const data = await res.json();
+          if (data.url) {
+            setLoginBgMediaUrl(data.url);
+            setNotice({
+              type: 'success',
+              message: `Successfully uploaded ${isVideo ? 'video' : 'picture'} "${file.name}" (${sizeMb} MB)! Click "Save Login Background Settings" to activate live on login screen.`,
+            });
+            setIsUploadingMedia(false);
+            return;
+          }
+        }
+      }
+
+      // Local fallback
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        const result = event.target?.result as string;
+        if (result) {
+          setLoginBgMediaUrl(result);
+          setNotice({
+            type: 'success',
+            message: `Loaded ${isVideo ? 'video' : 'picture'} "${file.name}" (${sizeMb} MB)! Click "Save Login Background Settings" to activate.`,
+          });
+        }
+        setIsUploadingMedia(false);
+      };
+      reader.readAsDataURL(file);
+    } catch {
+      setNotice({ type: 'error', message: 'Failed to upload media file. Please check connection and retry.' });
+      setIsUploadingMedia(false);
+    }
+  };
+
+  const handleSaveLoginBackground = async () => {
+    setIsSaving(true);
+    setNotice(null);
+
+    const success = await updateSettings({
+      loginBgType,
+      loginBgMediaUrl,
+      loginBgVideoLoop,
+      loginBgOpacity: Number(loginBgOpacity) || 65,
+    });
+
+    setIsSaving(false);
+    if (success) {
+      setNotice({ 
+        type: 'success', 
+        message: 'Login screen background updated successfully! Live loop and media are now active on the sign in page.' 
+      });
+    } else {
+      setNotice({ type: 'error', message: 'Failed to update login background settings.' });
+    }
+  };
+
   const applySmsPreset = (preset: 'default' | 'oled' | 'matrix' | 'navy' | 'light' | 'gold') => {
     setSmsPresetTheme(preset);
     if (preset === 'default') {
@@ -318,6 +430,19 @@ pm2 save
           >
             <Lock className="w-3.5 h-3.5" />
             <span>Admin Credentials</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveTab('login_bg')}
+            className={`px-3.5 py-2 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer ${
+              activeTab === 'login_bg'
+                ? 'bg-emerald-500 text-slate-950 font-bold shadow-md'
+                : 'bg-slate-950 text-slate-400 hover:text-white border border-slate-800'
+            }`}
+          >
+            <Film className="w-3.5 h-3.5 text-sky-400" />
+            <span>Login Background (Video / Pic)</span>
           </button>
 
           <button
@@ -660,6 +785,437 @@ pm2 save
                 <span>{isSaving ? 'Updating Settings...' : 'Save Buffer & Universal Box Settings'}</span>
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Tab: Login Page Live Background (Video Loop or Picture) */}
+      {activeTab === 'login_bg' && (
+        <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-5 sm:p-6 shadow-xl space-y-6" id="login-background-settings-panel">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800 pb-4">
+            <div className="flex items-center gap-2.5">
+              <div className="w-8 h-8 rounded-xl bg-sky-500/10 border border-sky-500/30 flex items-center justify-center">
+                <Film className="w-4 h-4 text-sky-400" />
+              </div>
+              <div>
+                <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                  <span>Login Screen Live Background Settings</span>
+                  <span className="px-2 py-0.5 rounded-full bg-sky-500/10 text-sky-400 border border-sky-500/30 text-[10px] font-mono">
+                    LIVE PREVIEW
+                  </span>
+                </h3>
+                <p className="text-[11px] text-slate-400">
+                  Select a live looping video (silent, no sound), upload your own photo/picture, or use cosmic & galaxy wallpapers for the login screen.
+                </p>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={handleSaveLoginBackground}
+              disabled={isSaving}
+              className="px-5 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold transition-all shadow-lg shadow-emerald-950/40 active:scale-95 cursor-pointer disabled:opacity-50 flex items-center gap-1.5 shrink-0 self-start sm:self-auto"
+            >
+              <Check className="w-4 h-4" />
+              <span>{isSaving ? 'Saving Changes...' : 'Save Login Background'}</span>
+            </button>
+          </div>
+
+          {/* Mode Selector Cards (Video, Picture, Celestial Mountain, Galaxy) */}
+          <div className="space-y-2">
+            <label className="text-xs font-bold text-slate-200 block">
+              Choose Login Screen Background Type
+            </label>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+              {[
+                {
+                  id: 'video',
+                  title: 'Live Video Wallpaper',
+                  desc: 'Continuous loop video (MP4/WebM), silent with 0 sound',
+                  badge: 'Live Video Loop',
+                  icon: <Video className="w-4 h-4 text-sky-400" />,
+                  activeBorder: 'border-sky-500 ring-2 ring-sky-500/30 bg-sky-950/30 text-white',
+                },
+                {
+                  id: 'image',
+                  title: 'Custom Picture / Image',
+                  desc: 'High-resolution photo or graphic with ambient live drift',
+                  badge: 'Live Picture',
+                  icon: <ImageIcon className="w-4 h-4 text-emerald-400" />,
+                  activeBorder: 'border-emerald-500 ring-2 ring-emerald-500/30 bg-emerald-950/30 text-white',
+                },
+                {
+                  id: 'cosmic',
+                  title: 'Celestial Mountain',
+                  desc: 'Original celestial mountains with comets & shooting stars',
+                  badge: 'Default Live Canvas',
+                  icon: <Sparkles className="w-4 h-4 text-purple-400" />,
+                  activeBorder: 'border-purple-500 ring-2 ring-purple-500/30 bg-purple-950/30 text-white',
+                },
+                {
+                  id: 'galaxy',
+                  title: 'Spiral Galaxy Swirl',
+                  desc: 'Dynamic 3D spiral arms, cosmic dust and glowing core',
+                  badge: 'Galaxy Canvas',
+                  icon: <Globe className="w-4 h-4 text-blue-400" />,
+                  activeBorder: 'border-blue-500 ring-2 ring-blue-500/30 bg-blue-950/30 text-white',
+                },
+              ].map((card) => {
+                const isSelected = loginBgType === card.id;
+                return (
+                  <button
+                    key={card.id}
+                    type="button"
+                    onClick={() => {
+                      setLoginBgType(card.id as any);
+                      // If switching to video and URL is empty, give a clean default
+                      if (card.id === 'video' && !loginBgMediaUrl) {
+                        setLoginBgMediaUrl('https://assets.mixkit.co/videos/preview/mixkit-space-odyssey-with-a-nebula-in-space-42618-large.mp4');
+                      }
+                    }}
+                    className={`p-3.5 rounded-2xl border text-left transition-all cursor-pointer relative overflow-hidden group flex flex-col justify-between ${
+                      isSelected
+                        ? card.activeBorder
+                        : 'bg-slate-950/80 border-slate-800 text-slate-400 hover:text-white hover:border-slate-700'
+                    }`}
+                  >
+                    <div>
+                      <div className="flex items-center justify-between mb-2">
+                        <div className="flex items-center gap-2">
+                          {card.icon}
+                          <span className="text-xs font-bold text-white">{card.title}</span>
+                        </div>
+                        {isSelected && <Check className="w-4 h-4 text-emerald-400" />}
+                      </div>
+                      <p className="text-[11px] text-slate-400 leading-relaxed mb-3">
+                        {card.desc}
+                      </p>
+                    </div>
+                    <span className="self-start text-[10px] font-mono px-2 py-0.5 rounded-full bg-slate-900 border border-slate-700 text-slate-300">
+                      {card.badge}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Media Input & File Upload (when Video or Image is selected) */}
+          {(loginBgType === 'video' || loginBgType === 'image') && (
+            <div className="p-4 sm:p-5 rounded-2xl bg-slate-950/80 border border-slate-800 space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <label className="text-xs font-bold text-slate-200 flex items-center gap-1.5">
+                  <Upload className="w-3.5 h-3.5 text-sky-400" />
+                  <span>{loginBgType === 'video' ? 'Video Media Source (MP4 / WebM)' : 'Picture Media Source (PNG / JPG / WebP)'}</span>
+                </label>
+                <span className="text-[11px] text-slate-500 font-mono">
+                  {loginBgType === 'video' ? 'Direct link or local video file' : 'Direct link or local image file'}
+                </span>
+              </div>
+
+              {/* URL Input */}
+              <div>
+                <label className="block text-[11px] font-semibold text-slate-400 mb-1">
+                  Direct Media URL ({loginBgType === 'video' ? 'Paste direct .mp4 or .webm link' : 'Paste direct image URL'})
+                </label>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    value={loginBgMediaUrl}
+                    onChange={(e) => setLoginBgMediaUrl(e.target.value)}
+                    placeholder={
+                      loginBgType === 'video'
+                        ? 'https://example.com/live-galaxy-wallpaper.mp4'
+                        : 'https://example.com/wallpaper.jpg'
+                    }
+                    className="flex-1 px-3.5 py-2.5 bg-slate-900 border border-slate-800 rounded-xl text-white font-mono text-xs focus:outline-none focus:border-sky-500"
+                  />
+                  {loginBgMediaUrl && (
+                    <button
+                      type="button"
+                      onClick={() => setLoginBgMediaUrl('')}
+                      className="px-3 py-2.5 rounded-xl bg-slate-900 border border-slate-800 text-slate-400 hover:text-white text-xs font-bold"
+                    >
+                      Clear
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Local File Upload Button (Supports up to 50MB) */}
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="text-[11px] font-semibold text-slate-400">
+                    Or Upload Directly from Your Computer / Phone:
+                  </label>
+                  <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
+                    Storage: Up to 50MB
+                  </span>
+                </div>
+                <label className={`flex flex-col items-center justify-center border-2 border-dashed rounded-2xl p-5 cursor-pointer transition-all group ${
+                  isUploadingMedia 
+                    ? 'border-sky-500 bg-sky-950/30 pointer-events-none' 
+                    : 'border-slate-700 hover:border-sky-500 bg-slate-900/60 hover:bg-slate-900'
+                }`}>
+                  {isUploadingMedia ? (
+                    <RefreshCw className="w-7 h-7 text-sky-400 animate-spin mb-1.5" />
+                  ) : (
+                    <Upload className="w-7 h-7 text-slate-500 group-hover:text-sky-400 transition-colors mb-1.5" />
+                  )}
+                  <span className="text-xs font-bold text-slate-200 group-hover:text-white">
+                    {isUploadingMedia 
+                      ? 'Uploading to server media storage (up to 50MB)... Please wait' 
+                      : `Click to browse ${loginBgType === 'video' ? 'Video File (MP4, WebM)' : 'Picture (PNG, JPG, WebP)'}`}
+                  </span>
+                  <span className="text-[10px] text-slate-500 mt-0.5">
+                    {mediaFileName ? `Selected: ${mediaFileName}` : 'High-capacity storage: Accepts media files up to 50MB'}
+                  </span>
+                  <input
+                    type="file"
+                    disabled={isUploadingMedia}
+                    accept={loginBgType === 'video' ? 'video/mp4, video/webm, video/*' : 'image/*'}
+                    onChange={handleMediaFileUpload}
+                    className="hidden"
+                  />
+                </label>
+              </div>
+
+              {/* Curated 1-Click Presets */}
+              <div className="space-y-2 pt-2 border-t border-slate-800/80">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-bold text-slate-300 flex items-center gap-1.5">
+                    <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+                    <span>Recommended 1-Click {loginBgType === 'video' ? 'Video' : 'Picture'} Presets</span>
+                  </label>
+                  <span className="text-[10px] text-slate-500">Instant Live Preview</span>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                  {loginBgType === 'video' ? (
+                    [
+                      {
+                        label: 'Deep Space Nebula',
+                        url: 'https://assets.mixkit.co/videos/preview/mixkit-space-odyssey-with-a-nebula-in-space-42618-large.mp4',
+                        desc: 'Vibrant interstellar cosmic dust',
+                      },
+                      {
+                        label: 'Starry Sky & Aurora',
+                        url: 'https://assets.mixkit.co/videos/preview/mixkit-starry-sky-with-flying-stars-and-aurora-borealis-42517-large.mp4',
+                        desc: 'Northern lights with shooting stars',
+                      },
+                      {
+                        label: 'Futuristic Neon Tunnel',
+                        url: 'https://assets.mixkit.co/videos/preview/mixkit-tunnel-of-futuristic-neon-lights-42526-large.mp4',
+                        desc: 'Cyber high-speed geometric grid',
+                      },
+                    ].map((p, idx) => (
+                      <button
+                        key={idx}
+                        type="button"
+                        onClick={() => {
+                          setLoginBgMediaUrl(p.url);
+                          setLoginBgType('video');
+                        }}
+                        className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer ${
+                          loginBgMediaUrl === p.url
+                            ? 'bg-sky-950/60 border-sky-500 text-sky-200 font-bold'
+                            : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
+                        }`}
+                      >
+                        <div className="text-xs font-bold text-slate-200">{p.label}</div>
+                        <div className="text-[10px] text-slate-500 truncate">{p.desc}</div>
+                      </button>
+                    ))
+                  ) : (
+                    [
+                      {
+                        label: 'Cosmic Mountain HD',
+                        url: 'https://images.unsplash.com/photo-1506744038136-46273834b3fb?auto=format&fit=crop&w=1920&q=80',
+                        desc: 'Atmospheric alpine twilight',
+                      },
+                      {
+                        label: 'Deep Galactic Core',
+                        url: 'https://images.unsplash.com/photo-1451187580459-43490279c0fa?auto=format&fit=crop&w=1920&q=80',
+                        desc: 'High-tech illuminated globe & stars',
+                      },
+                      {
+                        label: 'Cyber Emerald Horizon',
+                        url: 'https://images.unsplash.com/photo-1518709268805-4e9042af9f23?auto=format&fit=crop&w=1920&q=80',
+                        desc: 'Deep cosmic green neon expanse',
+                      },
+                    ].map((p, idx) => (
+                      <button
+                        key={idx}
+                        type="button"
+                        onClick={() => {
+                          setLoginBgMediaUrl(p.url);
+                          setLoginBgType('image');
+                        }}
+                        className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer ${
+                          loginBgMediaUrl === p.url
+                            ? 'bg-emerald-950/60 border-emerald-500 text-emerald-200 font-bold'
+                            : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
+                        }`}
+                      >
+                        <div className="text-xs font-bold text-slate-200">{p.label}</div>
+                        <div className="text-[10px] text-slate-500 truncate">{p.desc}</div>
+                      </button>
+                    ))
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Video Options & Overlay Darkness Slider */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {/* Control 1: Video Loop Setting */}
+            <div className="p-4 rounded-2xl bg-slate-950/80 border border-slate-800 space-y-2 flex flex-col justify-between">
+              <div>
+                <label className="text-xs font-bold text-slate-200 flex items-center gap-2">
+                  <Play className="w-3.5 h-3.5 text-sky-400" />
+                  <span>Continuous Video Loop (Live Wallpaper)</span>
+                </label>
+                <p className="text-[11px] text-slate-400 mt-1">
+                  When enabled, video automatically replays seamlessly in an infinite loop with zero gaps and muted sound.
+                </p>
+              </div>
+
+              <div className="flex items-center gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setLoginBgVideoLoop(!loginBgVideoLoop)}
+                  className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                    loginBgVideoLoop ? 'bg-sky-500' : 'bg-slate-800'
+                  }`}
+                >
+                  <span
+                    className={`inline-block h-5 w-5 transform rounded-full bg-white shadow-lg transition duration-200 ease-in-out ${
+                      loginBgVideoLoop ? 'translate-x-5' : 'translate-x-0'
+                    }`}
+                  />
+                </button>
+                <span className="text-xs font-semibold text-slate-300">
+                  {loginBgVideoLoop ? 'Looping Live (Enabled)' : 'Play Once (Disabled)'}
+                </span>
+              </div>
+            </div>
+
+            {/* Control 2: Darkening Scrim Opacity Slider */}
+            <div className="p-4 rounded-2xl bg-slate-950/80 border border-slate-800 space-y-2">
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-bold text-slate-200 flex items-center gap-1.5">
+                  <SlidersHorizontal className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>Background Darkening Contrast</span>
+                </label>
+                <span className="text-xs font-mono font-bold text-emerald-400">
+                  {loginBgOpacity}%
+                </span>
+              </div>
+              <p className="text-[11px] text-slate-400">
+                Adjust the dark overlay scrim so the login card and credentials text always pop out with crisp clarity.
+              </p>
+              <div className="pt-2">
+                <input
+                  type="range"
+                  min="0"
+                  max="95"
+                  step="5"
+                  value={loginBgOpacity}
+                  onChange={(e) => setLoginBgOpacity(Number(e.target.value))}
+                  className="w-full h-2 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-emerald-500"
+                />
+                <div className="flex justify-between text-[10px] text-slate-500 font-mono mt-1">
+                  <span>Transparent (0%)</span>
+                  <span>Recommended (65%)</span>
+                  <span>Deep Dark (95%)</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Interactive Miniature Live Preview Card */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-bold text-slate-200 flex items-center gap-1.5">
+                <Film className="w-3.5 h-3.5 text-sky-400" />
+                <span>Live Interactive Screen Preview (Real-Time Mockup)</span>
+              </label>
+              <span className="text-[11px] text-slate-400 font-mono">
+                Shows exact wallpaper & overlay rendering
+              </span>
+            </div>
+
+            <div className="relative w-full h-64 sm:h-80 rounded-3xl overflow-hidden border border-slate-800 shadow-2xl bg-black flex items-center justify-center">
+              {/* Media Preview Layer */}
+              {loginBgType === 'video' && loginBgMediaUrl ? (
+                <video
+                  src={loginBgMediaUrl}
+                  autoPlay
+                  loop={loginBgVideoLoop}
+                  muted
+                  playsInline
+                  className="absolute inset-0 w-full h-full object-cover pointer-events-none filter brightness-95"
+                />
+              ) : loginBgType === 'image' && loginBgMediaUrl ? (
+                <img
+                  src={loginBgMediaUrl}
+                  alt="Preview"
+                  className="absolute inset-0 w-full h-full object-cover filter brightness-95"
+                />
+              ) : (
+                <div className="absolute inset-0 bg-gradient-to-br from-slate-950 via-blue-950 to-slate-900 flex items-center justify-center">
+                  <div className="text-center p-4">
+                    <Sparkles className="w-8 h-8 text-sky-400 mx-auto mb-2 animate-pulse" />
+                    <p className="text-xs font-bold text-slate-300">
+                      {loginBgType === 'galaxy' ? 'Cosmic Spiral Galaxy Canvas' : 'Celestial Mountain & Comets Canvas'}
+                    </p>
+                    <p className="text-[10px] text-slate-500 mt-0.5">Rendered dynamically via GPU canvas on login page</p>
+                  </div>
+                </div>
+              )}
+
+              {/* Scrim Overlay */}
+              <div
+                className="absolute inset-0 bg-gradient-to-t from-black via-black/50 to-black/70 pointer-events-none"
+                style={{ opacity: loginBgOpacity / 100 }}
+              />
+
+              {/* Floating Mini Login Card */}
+              <div className="relative z-10 w-64 bg-slate-900/85 border border-blue-500/30 rounded-2xl p-4 shadow-2xl backdrop-blur-xl ring-1 ring-white/10 text-center space-y-2 pointer-events-none scale-90 sm:scale-100">
+                <div className="w-7 h-7 rounded-lg bg-emerald-500/20 border border-emerald-500/40 mx-auto flex items-center justify-center">
+                  <Lock className="w-3.5 h-3.5 text-emerald-400" />
+                </div>
+                <div>
+                  <h4 className="text-xs font-black text-white">Sign In Preview</h4>
+                  <div className="h-0.5 w-12 mx-auto bg-gradient-to-r from-emerald-400 via-white to-blue-500 rounded-full mt-1" />
+                </div>
+                <div className="space-y-1.5 pt-1 text-left">
+                  <div className="h-6 rounded-lg bg-slate-950/80 border border-slate-800 px-2 flex items-center text-[9px] text-slate-400 font-mono">
+                    Username
+                  </div>
+                  <div className="h-6 rounded-lg bg-slate-950/80 border border-slate-800 px-2 flex items-center text-[9px] text-slate-400 font-mono">
+                    ••••••••
+                  </div>
+                  <div className="h-6 rounded-lg bg-emerald-500 text-slate-950 text-[9px] font-bold flex items-center justify-center shadow-md">
+                    Sign In
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Action Footer */}
+          <div className="pt-2 flex items-center justify-end">
+            <button
+              type="button"
+              onClick={handleSaveLoginBackground}
+              disabled={isSaving}
+              className="px-6 py-3 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold transition-all shadow-lg shadow-emerald-950/40 active:scale-95 cursor-pointer disabled:opacity-50 flex items-center gap-2"
+            >
+              <Check className="w-4 h-4" />
+              <span>{isSaving ? 'Updating Settings...' : 'Save Login Background Settings'}</span>
+            </button>
           </div>
         </div>
       )}

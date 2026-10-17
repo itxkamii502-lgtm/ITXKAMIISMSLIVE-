@@ -148,6 +148,11 @@ export interface SiteSettings {
   smsCardBgColor?: string;
   smsFontSize?: 'compact' | 'normal' | 'large';
   smsPresetTheme?: 'default' | 'oled' | 'matrix' | 'navy' | 'light' | 'gold' | 'custom';
+  // Admin Login Background Settings (Picture or Video loop)
+  loginBgType?: 'cosmic' | 'galaxy' | 'video' | 'image';
+  loginBgMediaUrl?: string;
+  loginBgVideoLoop?: boolean;
+  loginBgOpacity?: number;
 }
 
 export interface SystemStats {

@@ -16,7 +16,7 @@ import {
 import { useAuth } from '../context/AuthContext';
 import { BrandLogo } from './common/BrandLogo';
 import { ThemeToggle } from './common/ThemeToggle';
-import { CosmicMountainLiveBackground } from './common/CosmicMountainLiveBackground';
+import { LoginLiveBackground } from './common/LoginLiveBackground';
 import { THEMES } from '../utils/theme';
 
 export const LoginScreen: React.FC = () => {
@@ -94,8 +94,8 @@ export const LoginScreen: React.FC = () => {
 
   return (
     <div className="min-h-screen w-full bg-[#030712] flex flex-col items-center justify-center p-4 sm:p-6 relative overflow-hidden font-sans selection:bg-emerald-600 selection:text-white">
-      {/* User's Exact Celestial Mountain & Moon Live Video Wallpaper (Silent, No Sound, Login Only) */}
-      <CosmicMountainLiveBackground />
+      {/* Live Background Wallpaper: Custom Video in continuous loop, Custom Image, Celestial Mountain, or Galaxy */}
+      <LoginLiveBackground settings={settings} />
 
       <div className="relative z-10 w-full max-w-md flex flex-col items-center">
         {/* Main Brand Logo Header (Large, Prominent & Distinct) */}

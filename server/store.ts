@@ -474,6 +474,10 @@ class Store {
     smsTextColor: '#f8fafc',
     smsBorderColor: '#1e293b',
     smsPresetTheme: 'default',
+    loginBgType: 'cosmic',
+    loginBgMediaUrl: '',
+    loginBgVideoLoop: true,
+    loginBgOpacity: 65,
   };
 
   private clients: Map<string, ClientAccount> = new Map();
@@ -494,9 +498,15 @@ class Store {
   private clientClearedPart: Map<string, number> = new Map();
 
   // Robust Persistent Seen-Registry for Deduplication
-  // Retains seen message signatures even across admin log clears to prevent old SMS re-syncing
   private seenFingerprints: Map<string, number> = new Map();
   private saveTimeout: NodeJS.Timeout | null = null;
+  private isSavingDisk: boolean = false;
+  private pendingSaveAgain: boolean = false;
+
+  // Cached system stats for high-performance dashboard polling
+  private cachedStats: SystemStats | null = null;
+  private cachedStatsAt: number = 0;
+  private statsDirty: boolean = true;
 
   constructor() {
     const loaded = this.loadFromDisk();
@@ -508,17 +518,23 @@ class Store {
   }
 
   public scheduleSave() {
+    this.statsDirty = true;
     if (this.saveTimeout) return;
     this.saveTimeout = setTimeout(() => {
       this.saveTimeout = null;
       this.saveToDisk();
-    }, 1500);
+    }, 2000);
   }
 
-  public saveToDisk() {
+  public async saveToDisk() {
+    if (this.isSavingDisk) {
+      this.pendingSaveAgain = true;
+      return;
+    }
+    this.isSavingDisk = true;
     try {
       if (!fs.existsSync(DATA_DIR)) {
-        fs.mkdirSync(DATA_DIR, { recursive: true });
+        await fs.promises.mkdir(DATA_DIR, { recursive: true });
       }
       const payload = {
         settings: this.settings,
@@ -533,9 +549,19 @@ class Store {
         messages: this.messages.slice(0, 100000),
         seenFingerprints: Array.from(this.seenFingerprints.entries()).slice(-50000),
       };
-      fs.writeFileSync(DATA_FILE, JSON.stringify(payload, null, 2), 'utf-8');
+      // Compact JSON stringification (zero whitespace indentation) prevents event-loop blocking and reduces disk/RAM size
+      const jsonStr = JSON.stringify(payload);
+      const tmpFile = `${DATA_FILE}.tmp.${Date.now()}`;
+      await fs.promises.writeFile(tmpFile, jsonStr, 'utf-8');
+      await fs.promises.rename(tmpFile, DATA_FILE);
     } catch (err) {
       console.error('Storage save error:', err);
+    } finally {
+      this.isSavingDisk = false;
+      if (this.pendingSaveAgain) {
+        this.pendingSaveAgain = false;
+        this.scheduleSave();
+      }
     }
   }
 
@@ -2215,18 +2241,26 @@ class Store {
     }
 
     // 2. Secondary In-Memory Array Check (Phone + exact text within 60s duplicate)
-    const existingIndex = this.messages.findIndex(m => {
-      if (m.phone !== phone) return false;
-      if (cleanMsg && m.message && m.message.trim() === cleanMsg && Math.abs(m.timestamp - dataTs) < 60000) {
-        return true;
+    // High-performance optimization: Since this.messages is ordered newest-first,
+    // only scan recent messages within the 65-second window, breaking immediately once older
+    let existingMsg: SmsMessage | null = null;
+    const minDuplicateTs = dataTs - 65000;
+    const searchLimit = Math.min(this.messages.length, 300);
+    for (let i = 0; i < searchLimit; i++) {
+      const m = this.messages[i];
+      if (m.timestamp < minDuplicateTs) {
+        break; // Older than 65 seconds: cannot match
       }
-      return false;
-    });
+      if (m.phone === phone && cleanMsg && m.message && m.message.trim() === cleanMsg && Math.abs(m.timestamp - dataTs) < 60000) {
+        existingMsg = m;
+        break;
+      }
+    }
 
-    if (existingIndex !== -1) {
+    if (existingMsg) {
       // Register in seen map to prevent future checks
       this.seenFingerprints.set(fingerprint, Date.now());
-      return this.messages[existingIndex];
+      return existingMsg;
     }
 
     // Register fingerprint permanently
@@ -2236,11 +2270,13 @@ class Store {
     this.cumulativeTotalSms++;
 
     // Prune seenFingerprints if exceeding 50,000 entries (keep most recent 40,000)
+    // O(K) pruning using Map key order, zero CPU sort overhead
     if (this.seenFingerprints.size > 50000) {
-      const entries = Array.from(this.seenFingerprints.entries()).sort((a, b) => a[1] - b[1]);
-      const toDelete = entries.slice(0, 10000);
-      for (const [k] of toDelete) {
-        this.seenFingerprints.delete(k);
+      const it = this.seenFingerprints.keys();
+      for (let i = 0; i < 10000; i++) {
+        const next = it.next();
+        if (next.done) break;
+        this.seenFingerprints.delete(next.value);
       }
     }
 
@@ -2849,6 +2885,10 @@ class Store {
       smsBorderColor: this.settings.smsBorderColor,
       smsPresetTheme: this.settings.smsPresetTheme,
       smsFontSize: this.settings.smsFontSize,
+      loginBgType: this.settings.loginBgType || 'cosmic',
+      loginBgMediaUrl: this.settings.loginBgMediaUrl || '',
+      loginBgVideoLoop: this.settings.loginBgVideoLoop ?? true,
+      loginBgOpacity: this.settings.loginBgOpacity ?? 65,
     };
   }
 
@@ -2861,6 +2901,7 @@ class Store {
     if (newSettings.clientMaxRetention && newSettings.clientMaxRetention > 0) {
       this.settings.clientMaxRetention = Math.max(100, Math.min(50000, newSettings.clientMaxRetention));
     }
+    this.statsDirty = true;
     this.scheduleSave();
     return this.getSettings();
   }
@@ -3165,6 +3206,11 @@ class Store {
 
   public getStats(): SystemStats {
     const now = Date.now();
+    // High-performance caching: Return cached stats if clean and within 2.5s
+    if (!this.statsDirty && this.cachedStats && (now - this.cachedStatsAt) < 2500) {
+      return this.cachedStats;
+    }
+
     // Strictly calculate daily stats based on Pakistan Standard Time (PKT = UTC+5) 5:00 AM reset cycle
     const { todayStartMs, yesterdayStartMs } = getPakistan5AmCycleBounds(now);
 
@@ -3179,17 +3225,42 @@ class Store {
     const yearStart = new Date(todayStart.getFullYear(), 0, 1, 0, 0, 0, 0);
     const yearStartMs = yearStart.getTime();
 
+    const twoHoursAgo = now - 3600000 * 2;
+
+    // Daily stats for last 7 cycles of 24-hours aligned to Pakistan 5:00 AM cycle
+    const dailyCycleBins: { cycleStart: number; cycleEnd: number; count: number; date: string; label: string }[] = [];
+    for (let i = 6; i >= 0; i--) {
+      const cycleStart = todayStartMs - i * 86400000;
+      const cycleEnd = cycleStart + 86400000;
+      const d = new Date(cycleStart + 5 * 3600000); // PKT representation
+      const label = d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+      dailyCycleBins.push({
+        cycleStart,
+        cycleEnd,
+        count: 0,
+        date: d.toISOString().split('T')[0],
+        label,
+      });
+    }
+
+    const oldestBinStart = dailyCycleBins[0].cycleStart;
+
     let todaySms = 0;
     let yesterdaySms = 0;
     let thisWeekSms = 0;
     let thisMonthSms = 0;
     let thisYearSms = 0;
+    let recentOtpCount = 0;
+    const serviceCounts: Record<string, number> = {};
 
-    for (const m of this.messages) {
+    // Single unified pass over messages
+    for (let i = 0; i < this.messages.length; i++) {
+      const m = this.messages[i];
       const ts = m.timestamp || 0;
+
       if (ts >= todayStartMs) {
         todaySms++;
-      } else if (ts >= yesterdayStartMs && ts < todayStartMs) {
+      } else if (ts >= yesterdayStartMs) {
         yesterdaySms++;
       }
       if (ts >= weekStartMs) {
@@ -3201,30 +3272,31 @@ class Store {
       if (ts >= yearStartMs) {
         thisYearSms++;
       }
+      if (m.otp && ts >= twoHoursAgo) {
+        recentOtpCount++;
+      }
+      if (m.service) {
+        serviceCounts[m.service] = (serviceCounts[m.service] || 0) + 1;
+      }
+
+      // Populate 7-day cycle bins
+      if (ts >= oldestBinStart) {
+        for (let b = 0; b < dailyCycleBins.length; b++) {
+          const bin = dailyCycleBins[b];
+          if (ts >= bin.cycleStart && ts < bin.cycleEnd) {
+            bin.count++;
+            break;
+          }
+        }
+      }
     }
 
-    // Daily stats for last 7 cycles of 24-hours aligned to Pakistan 5:00 AM cycle
-    const dailyStats: { date: string; count: number; label: string }[] = [];
-    for (let i = 6; i >= 0; i--) {
-      const cycleStart = todayStartMs - i * 86400000;
-      const cycleEnd = cycleStart + 86400000;
-      const count = this.messages.filter(m => (m.timestamp || 0) >= cycleStart && (m.timestamp || 0) < cycleEnd).length;
-      const d = new Date(cycleStart + 5 * 3600000); // PKT representation
-      const label = d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-      dailyStats.push({
-        date: d.toISOString().split('T')[0],
-        count,
-        label,
-      });
-    }
+    const dailyStats = dailyCycleBins.map(b => ({
+      date: b.date,
+      count: b.count,
+      label: b.label,
+    }));
 
-    const recentOtpCount = this.messages.filter(m => !!m.otp && m.timestamp >= (now - 3600000 * 2)).length;
-
-    // Service frequency counts
-    const serviceCounts: Record<string, number> = {};
-    for (const m of this.messages) {
-      serviceCounts[m.service] = (serviceCounts[m.service] || 0) + 1;
-    }
     const topServices = Object.entries(serviceCounts)
       .map(([service, count]) => ({ service, count }))
       .sort((a, b) => b.count - a.count)
@@ -3240,7 +3312,7 @@ class Store {
       if (c.status === 'active') activeClients++;
     }
 
-    return {
+    const result: SystemStats = {
       totalSms: Math.max(this.cumulativeTotalSms, this.messages.length),
       todaySms,
       yesterdaySms,
@@ -3254,6 +3326,12 @@ class Store {
       recentOtpCount,
       topServices,
     };
+
+    this.cachedStats = result;
+    this.cachedStatsAt = now;
+    this.statsDirty = false;
+
+    return result;
   }
 }
 

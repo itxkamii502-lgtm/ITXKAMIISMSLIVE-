@@ -142,19 +142,24 @@ export const LiveSMSView: React.FC = () => {
       if (res.ok) {
         const data = await res.json();
         const list: SmsMessage[] = data.messages || [];
-        previousCount.current = list.length;
-        setMessages(list);
+        setMessages((prev) => {
+          if (prev.length === list.length && prev[0]?.id === list[0]?.id) {
+            return prev;
+          }
+          previousCount.current = list.length;
+          return list;
+        });
       }
     } catch {
       // Ignore network hiccup / VPN reconnection
     } finally {
       if (manual) setIsRefreshing(false);
     }
-  }, [session, selectedPart]);
+  }, [session, selectedPart, settings?.maxSmsRetention]);
 
   useEffect(() => {
     fetchPartitions();
-    const partInterval = setInterval(fetchPartitions, 20000);
+    const partInterval = setInterval(fetchPartitions, 25000);
     return () => clearInterval(partInterval);
   }, [fetchPartitions]);
 
@@ -174,16 +179,36 @@ export const LiveSMSView: React.FC = () => {
     if (!selectedPart || !session) return;
     fetchMessages();
 
-    // 1-second background sync fallback
-    const interval = setInterval(() => {
-      fetchMessages();
-    }, 1000);
+    // Resilient adaptive polling: 15s gentle reconciliation when SSE is healthy, 4s fallback if SSE is disconnected
+    let isSseConnected = false;
+    let pollInterval = 15000;
+    let interval: NodeJS.Timeout | null = null;
+
+    const startPollTimer = (ms: number) => {
+      if (interval) clearInterval(interval);
+      pollInterval = ms;
+      interval = setInterval(() => {
+        fetchMessages();
+      }, ms);
+    };
+
+    startPollTimer(15000);
 
     // Instant 0ms Server-Sent Events (SSE) stream listener for real-time live SMS ingestion
     let eventSource: EventSource | null = null;
     try {
       const sseUrl = `/api/sms/stream?token=${encodeURIComponent(session.token)}&part=${encodeURIComponent(selectedPart)}`;
       eventSource = new EventSource(sseUrl);
+
+      eventSource.onopen = () => {
+        isSseConnected = true;
+        if (pollInterval !== 15000) startPollTimer(15000);
+      };
+
+      eventSource.onerror = () => {
+        isSseConnected = false;
+        if (pollInterval !== 4000) startPollTimer(4000);
+      };
 
       eventSource.addEventListener('new_sms', (event) => {
         try {
@@ -199,7 +224,7 @@ export const LiveSMSView: React.FC = () => {
         }
       });
     } catch {
-      // Fallback to 1-second polling
+      startPollTimer(4000);
     }
 
     const handleVisibility = () => {
@@ -211,7 +236,7 @@ export const LiveSMSView: React.FC = () => {
     window.addEventListener('online', handleVisibility);
 
     return () => {
-      clearInterval(interval);
+      if (interval) clearInterval(interval);
       if (eventSource) {
         eventSource.close();
       }

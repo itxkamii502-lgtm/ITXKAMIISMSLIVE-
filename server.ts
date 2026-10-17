@@ -2,6 +2,7 @@ import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import compression from 'compression';
 import path from 'path';
+import fs from 'fs';
 import { createServer as createViteServer } from 'vite';
 import { store, safeCompare, sanitizeInputString } from './server/store';
 import type { UserSession } from './src/types';
@@ -125,8 +126,8 @@ function getClientIp(req: Request): string {
 
 // Global API Rate Limiter
 app.use('/api', (req: Request, res: Response, next: NextFunction) => {
-  // Allow SSE stream without counting against standard request rate limiter
-  if (req.path === '/sms/stream') {
+  // Allow SSE stream and media uploads without counting against standard request rate limiter
+  if (req.path === '/sms/stream' || req.path === '/upload/media') {
     return next();
   }
 
@@ -236,6 +237,71 @@ app.post('/api/client/activity', requireAuth, (req: AuthRequest, res: Response) 
   }
   res.json({ success: true });
 });
+
+// ==========================================
+// STATIC MEDIA UPLOADS & 50MB MEDIA UPLOAD ENGINE
+// ==========================================
+const UPLOADS_DIR = path.join(process.cwd(), 'data', 'uploads');
+if (!fs.existsSync(UPLOADS_DIR)) {
+  fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+}
+
+// Serve uploaded video and image media with byte-range headers for video streaming
+app.use('/uploads', express.static(UPLOADS_DIR, {
+  maxAge: '30d',
+  setHeaders: (res, filePath) => {
+    if (filePath.endsWith('.mp4')) {
+      res.setHeader('Content-Type', 'video/mp4');
+      res.setHeader('Accept-Ranges', 'bytes');
+    } else if (filePath.endsWith('.webm')) {
+      res.setHeader('Content-Type', 'video/webm');
+      res.setHeader('Accept-Ranges', 'bytes');
+    }
+  }
+}));
+
+// Admin Media Upload Endpoint: Supports up to 50MB video/picture files directly
+app.post(
+  '/api/upload/media',
+  requireAdmin,
+  express.raw({ type: '*/*', limit: '55mb' }),
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const rawFilename = (req.query.filename as string) || 'media.mp4';
+      const extMatch = rawFilename.match(/\.([a-zA-Z0-9]+)$/);
+      const ext = extMatch ? extMatch[1].toLowerCase() : 'mp4';
+      const allowedExts = ['mp4', 'webm', 'mov', 'jpg', 'jpeg', 'png', 'webp', 'gif'];
+      if (!allowedExts.includes(ext)) {
+        return res.status(400).json({ error: `File type .${ext} is not supported. Use MP4, WebM, JPG, PNG, or WebP.` });
+      }
+
+      const buffer = req.body;
+      if (!buffer || !Buffer.isBuffer(buffer) || buffer.length === 0) {
+        return res.status(400).json({ error: 'No media data received. Please select a valid file up to 50MB.' });
+      }
+
+      if (buffer.length > 52 * 1024 * 1024) {
+        return res.status(400).json({ error: 'File size exceeds 50MB limit.' });
+      }
+
+      const safeName = `login_bg_${Date.now()}.${ext}`;
+      const filePath = path.join(UPLOADS_DIR, safeName);
+      await fs.promises.writeFile(filePath, buffer);
+
+      const mediaUrl = `/uploads/${safeName}`;
+      return res.json({
+        success: true,
+        url: mediaUrl,
+        filename: safeName,
+        sizeBytes: buffer.length,
+        message: `File uploaded successfully (${(buffer.length / (1024 * 1024)).toFixed(1)} MB).`,
+      });
+    } catch (err: any) {
+      console.error('Media upload error:', err);
+      return res.status(500).json({ error: 'Upload failed: ' + err.message });
+    }
+  }
+);
 
 // ==========================================
 // 1. AUTHENTICATION & SESSION ENDPOINTS
@@ -1601,6 +1667,25 @@ app.put('/api/settings', requireAdmin, (req: AuthRequest, res: Response) => {
   if (body.smsBorderColor !== undefined) sanitizedSettings.smsBorderColor = sanitizeInputString(body.smsBorderColor, 32);
   if (body.smsPresetTheme !== undefined) sanitizedSettings.smsPresetTheme = body.smsPresetTheme;
   if (body.smsFontSize !== undefined) sanitizedSettings.smsFontSize = body.smsFontSize;
+
+  // Login Background Settings (Video loop or Picture on login page)
+  if (body.loginBgType !== undefined) {
+    const val = String(body.loginBgType).toLowerCase().trim();
+    if (['cosmic', 'galaxy', 'video', 'image'].includes(val)) {
+      sanitizedSettings.loginBgType = val;
+    }
+  }
+  if (body.loginBgMediaUrl !== undefined) {
+    const url = String(body.loginBgMediaUrl).trim();
+    // Allow data URL (base64 image or video), absolute path, or http(s) URL
+    if (url.startsWith('data:') || url.startsWith('http://') || url.startsWith('https://') || url.startsWith('/') || url === '') {
+      sanitizedSettings.loginBgMediaUrl = url.slice(0, 10 * 1024 * 1024); // up to 10MB data/url
+    }
+  }
+  if (body.loginBgVideoLoop !== undefined) sanitizedSettings.loginBgVideoLoop = Boolean(body.loginBgVideoLoop);
+  if (body.loginBgOpacity !== undefined) {
+    sanitizedSettings.loginBgOpacity = Math.max(0, Math.min(100, Number(body.loginBgOpacity) || 65));
+  }
 
   const updated = store.updateSettings(sanitizedSettings);
   res.json({ success: true, settings: updated });
